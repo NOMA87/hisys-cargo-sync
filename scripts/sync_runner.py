@@ -271,7 +271,7 @@ def main():
         try:
             parsed, _, _, _, _ = fetch_with_fallback(
                 api_key, case["blYy"], case["hbl"], case["mbl"],
-                case["io"], case["type"], cargmt=case["cargmt"]
+                case["io"], case["type"], cargmt=case["cargmt"], hwaju=case["hwaju"]
             )
             result = build_result(parsed, case["hwaju"], case["io"])
         except Exception as e:
