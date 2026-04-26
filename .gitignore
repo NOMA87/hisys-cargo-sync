@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.env
+.env.*
+*.local
+key.txt
+proxy_token.txt
+notion_token.txt
+.DS_Store
