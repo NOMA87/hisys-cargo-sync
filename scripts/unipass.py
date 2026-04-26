@@ -69,6 +69,9 @@ SUPPORTED_IO = {"해상수입", "항공수입"}
 # 추후 노션 화주 DB에 "식품검역대상" 체크박스 추가 시 그걸로 대체 가능
 QUARANTINE_HWAJU = {"하이시스 로지텍", "하이시스로지텍"}
 
+# MBL 우선 검색 화주 (LCL인데 HBL로 검색 안 되는 케이스 — 자향 등)
+HWAJU_MBL_FIRST = {"자향"}
+
 # v2.0: 빈 응답/no-data 사전 필터 (#4)
 INVALID_BL_VALUES = {"TBA", "TBD", "TBN", "", "N/A", "NA", "-"}
 
@@ -357,7 +360,7 @@ def build_result(parsed, hwaju, io_type):
     if parsed.get("_error"):
         return {"skip": True, "reason": "API 오류: " + parsed["_error"]}
     if parsed.get("_empty"):
-        return {"skip": True, "reason": "응답 헤더 없음 (적핟목록 미접수)", "process": "미반영"}
+        return {"skip": True, "reason": "응답 헤더 없음 (적하목록 미접수)", "process": "미반영"}
     if parsed.get("_multi"):
         return {"skip": True, "reason": "다건 응답 - 보조키(MBL/cargMtNo) 필요"}
 
@@ -449,38 +452,46 @@ def build_result(parsed, hwaju, io_type):
     }
 
 
-def decide_search_order(io, type_):
+def decide_search_order(io, type_, hwaju=""):
     """
     검색키 우선순위 결정.
 
     Returns:
         list of (key_name, key_label) tuples in order to try.
         e.g. [("hbl", "HBL")] or [("mbl", "MBL"), ("hbl", "HBL")]
+
+    정책:
+        - 자향 등 HWAJU_MBL_FIRST 화주: 항상 MBL → HBL
+        - FCL: MBL → HBL
+        - LCL: HBL → MBL (실패 시 fallback)
+        - 항공: HBL → MBL
+        - TYPE 미지정 해상수입: MBL → HBL
     """
     t = (type_ or "").upper().strip()
     io = (io or "").strip()
+    is_mbl_first = any(h in (hwaju or "") for h in HWAJU_MBL_FIRST)
     if io == "해상수입":
+        if is_mbl_first:
+            return [("mbl", "MBL"), ("hbl", "HBL")]
         if t == "FCL":
             return [("mbl", "MBL"), ("hbl", "HBL")]
         if t == "LCL":
-            return [("hbl", "HBL")]
-        # TYPE 미지정 해상수입 → 안전 기본값: MBL 우선 + HBL fallback
+            return [("hbl", "HBL"), ("mbl", "MBL")]  # LCL도 fallback 추가
         return [("mbl", "MBL"), ("hbl", "HBL")]
     if io == "항공수입":
-        # 항공 → HBL 우선 + MBL fallback
         return [("hbl", "HBL"), ("mbl", "MBL")]
-    # 그 외(수출/내륹/3국) → 호출 자체를 안 함, build_result에서 skip 처리
-    return [("hbl", "HBL")]
+    return [("hbl", "HBL"), ("mbl", "MBL")]
 
 
-def fetch_with_fallback(api_key, bl_yy, hbl, mbl, io, type_, cargmt=None, debug=False):
+def fetch_with_fallback(api_key, bl_yy, hbl, mbl, io, type_, cargmt=None, hwaju="", debug=False):
     """
     검색 우선순위에 따라 호출하고 첫 valid 응답 반환.
 
     v2.0 (#1, #4): TBA/빈 BL 사전 필터, 같은 키 재시도(call_unipass에서 처리)
     v2.0 (#3): 다건 응답 시 cargmt 자동 시도 (있으면)
+    v2.2: 화주별 검색키 우선순위 (자향 등 MBL 우선)
     """
-    order = decide_search_order(io, type_)
+    order = decide_search_order(io, type_, hwaju=hwaju)
     attempts = []
     multi_seen = False
 
