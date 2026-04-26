@@ -77,7 +77,7 @@ def query_chasu_db(token, ds_id, page_size=100):
     body_template = {
         "filter": {
             "and": [
-                {"property": "입력완료", "checkbox": {"equals": True}},
+                {"property": "입력완료√", "checkbox": {"equals": True}},
                 {"property": "프로세스", "status": {"does_not_equal": "반출완료"}},
                 {"or": [
                     {"property": "I/O", "select": {"equals": "해상수입"}},
