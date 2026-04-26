@@ -267,6 +267,7 @@ def main():
         case = parse_chasu_page(page, notion_token)
         if is_invalid_bl(case["hbl"]) and is_invalid_bl(case["mbl"]):
             stats["skipped"] += 1
+            print(f"  [{i+1}/{len(pages)}] {case['차수']:20} 스킵: HBL/MBL 모두 invalid (TBA 등)")
             continue
 
         try:
@@ -283,8 +284,9 @@ def main():
         if result.get("skip"):
             reason = result.get("reason", "")
             stats["skipped"] += 1
-            if "응답 헤더 없음" in reason or "적하목록" in reason:
+            if "응답 헤더 없음" in reason or "적핟목록" in reason:
                 stats["no_response"] += 1
+            print(f"  [{i+1}/{len(pages)}] {case['차수']:20} 스킵: {reason[:60]}")
             continue
 
         # 변경된 필드만 update
