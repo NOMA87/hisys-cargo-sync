@@ -1,0 +1,33 @@
+name: 유니패스 차수 동기화
+
+on:
+  schedule:
+    # KST 평일 08/11/14/17시 4회 (UTC 변환)
+    # KST 08시 = UTC 전날 23시 → 요일 0-4 (일~목)
+    - cron: "0 23 * * 0-4"
+    # KST 11/14/17시 = UTC 02/05/08시 → 평일 1-5 (월~금)
+    - cron: "0 2,5,8 * * 1-5"
+  workflow_dispatch:  # 수동 실행 버튼 활성화
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run sync_runner
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DS_ID: ${{ secrets.NOTION_DS_ID }}
+          UNIPASS_PROXY_URL: ${{ secrets.UNIPASS_PROXY_URL }}
+          PROXY_TOKEN: ${{ secrets.PROXY_TOKEN }}
+          PYTHONIOENCODING: utf-8
+        run: |
+          python scripts/sync_runner.py
