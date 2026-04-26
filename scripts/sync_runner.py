@@ -77,9 +77,7 @@ def query_chasu_db(token, ds_id, page_size=100):
     body_template = {
         "filter": {
             "and": [
-                {"property": "HBL No.", "title": {"is_not_empty": True}}
-                if False else  # title이 아니라 rich_text — 아래로 교체
-                {"property": "HBL No.", "rich_text": {"is_not_empty": True}},
+                {"property": "입력완료", "checkbox": {"equals": True}},
                 {"property": "프로세스", "status": {"does_not_equal": "반출완료"}},
                 {"or": [
                     {"property": "I/O", "select": {"equals": "해상수입"}},
@@ -139,7 +137,7 @@ def get_hwaju_name(token, relation_ids):
         return cached
     try:
         page = notion_request("GET", f"/pages/{pid}", token)
-        # 일반적으로 첫 title property가 화주명
+        # 일반적으로 첛 title property가 화주명
         for name, prop in page.get("properties", {}).items():
             if prop.get("type") == "title":
                 arr = prop.get("title", [])
@@ -265,9 +263,9 @@ def main():
 
     for i, page in enumerate(pages):
         case = parse_chasu_page(page, notion_token)
-        if is_invalid_bl(case["hbl"]) and is_invalid_bl(case["mbl"]):
+        if is_invalid_bl(case["hbl"]) or is_invalid_bl(case["mbl"]):
             stats["skipped"] += 1
-            print(f"  [{i+1}/{len(pages)}] {case['차수']:20} 스킵: HBL/MBL 모두 invalid (TBA 등)")
+            print(f"  [{i+1}/{len(pages)}] {case['차수']:20} 스킵: HBL 또는 MBL 공란/TBA")
             continue
 
         try:
@@ -284,7 +282,7 @@ def main():
         if result.get("skip"):
             reason = result.get("reason", "")
             stats["skipped"] += 1
-            if "응답 헤더 없음" in reason or "적핟목록" in reason:
+            if "응답 헤더 없음" in reason or "적하목록" in reason:
                 stats["no_response"] += 1
             print(f"  [{i+1}/{len(pages)}] {case['차수']:20} 스킵: {reason[:60]}")
             continue
