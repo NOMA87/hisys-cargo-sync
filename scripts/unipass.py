@@ -467,18 +467,18 @@ def build_result(parsed, hwaju, io_type):
     )
     outbound_at = prcs_dttm_to_iso(outbound_row.get("prcsDttm", "") if outbound_row else "")                             
     # 컨테이너 번호 수집 (v2.7): history + header 다중 필드 + 패턴 매칭
+    _cntr_re = re.compile(r"^[A-Z]{4}\d{7}$")
     _cntr_set = set()
     for _h in history:
-        for _fld in ("cntrNo", "cntrNum", "contNo"):
-            _v = (_h.get(_fld) or "").strip()
-            if _v:
-                _cntr_set.add(_v)
+        _v = (_h.get("cntrNo") or "").strip().upper()
+        if _v and _cntr_re.match(_v):
+            _cntr_set.add(_v)
     for _hf in ("cntrNoLstCn", "cntrNoCn", "cntrNoList"):
         _v = (header.get(_hf) or "").strip()
         if _v:
             for _c in re.split(r"[,\s]+", _v):
-                _c = _c.strip()
-                if _c:
+                _c = _c.strip().upper()
+                if _c and _cntr_re.match(_c):
                     _cntr_set.add(_c)
     container_nos_str = ", ".join(sorted(_cntr_set)) if _cntr_set else None
 
