@@ -13,12 +13,21 @@ on:
     - cron: "15 7 * * 1-5"     # KST 16:15
     - cron: "45 8 * * 1-5"     # KST 17:45  퇴근 직전 최종 확인
     - cron: "0 10 * * 1-5"     # KST 19:00  퇴근 후 1시간 (늦은 진행 캐치)
-  workflow_dispatch:  # 수동 실행 버튼 활성화
+  workflow_dispatch:  # 수동 실행
+    inputs:
+      backfill:
+        description: 'Backfill 모드 (모든 수입 차수 대상, 반입/반출시간만 채움)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,5 +44,6 @@ jobs:
           UNIPASS_PROXY_URL: ${{ secrets.UNIPASS_PROXY_URL }}
           PROXY_TOKEN: ${{ secrets.PROXY_TOKEN }}
           PYTHONIOENCODING: utf-8
+          BACKFILL: ${{ inputs.backfill }}
         run: |
           python scripts/sync_runner.py
