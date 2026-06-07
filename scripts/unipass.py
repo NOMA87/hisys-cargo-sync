@@ -532,7 +532,7 @@ def fetch_hjit_freeday(cntr_no, timeout=10):
         return None
     if "이미 반출 완료된 컨테이너" in html:
         return None
-    m = re.search(r"반출기한[^:]*:\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", html)
+    m = re.search(r"FreeTime[^:]*:\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", html)
     if not m:
         return None
     return m.group(1).replace(" ", "T") + ":00+09:00"
