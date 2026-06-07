@@ -457,6 +457,16 @@ def build_result(parsed, hwaju, io_type):
     last_inbound = max(inbound_rows, key=lambda h: h.get("prcsDttm", "") or "", default=None)
     inbound_at = prcs_dttm_to_iso(last_inbound.get("prcsDttm", "") if last_inbound else "")
 
+    # 반출시간 (v2.4): 수입신고수리 후 물품반출 = 단일 이벤트
+    # - 모든 케이스: 보세운송반출(LCL 중간)은 제외, 실제 화주 반출만
+    outbound_row = next(
+        (h for h in history
+         if norm(h.get("cargTrcnRelaBsopTpcd", "")) == "반출신고"
+         and "보세운송반출" not in norm(h.get("rlbrCn", ""))),
+        None
+    )
+    outbound_at = prcs_dttm_to_iso(outbound_row.get("prcsDttm", "") if outbound_row else "")
+
     return {
         "skip": False,
         "reason": "정상 매핑" if process != "미반영" else "매핑 가능 단계 없음",
@@ -468,6 +478,7 @@ def build_result(parsed, hwaju, io_type):
         "quarantineDeclNo": (quar.get("dclrNo") if quar else None) or None,
         "quarantineAt": yyyymmdd_to_iso((quar.get("prcsDttm", "")[:8] if quar else "")),
         "inboundAt": inbound_at,
+        "outboundAt": outbound_at,
         "isManaged": header.get("mtTrgtCargYnNm", "") == "Y",
         "shipNm": header.get("shipNm") or None,
         "vydf": header.get("vydf") or None,
