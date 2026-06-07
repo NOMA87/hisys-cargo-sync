@@ -199,7 +199,7 @@ def extract_container_nos_from_remark(remark):
     if not remark:
         return None
     # 4 alpha + 7 digit 패턴 (ISO 6346 컨테이너 번호) 전체 매칭
-    nums = re.findall(r"[A-Z]{4}\d{7}", remark.upper())
+    nums = re.findall(r"\b[A-Z]{4}\d{7}\b", remark.upper())
     return ", ".join(sorted(set(nums))) if nums else None
 
 
