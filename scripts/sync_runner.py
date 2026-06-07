@@ -34,7 +34,7 @@ sys.path.insert(0, SCRIPT_DIR)
 
 from unipass import (
     get_api_key, fetch_with_fallback, build_result, is_invalid_bl, norm,
-    QUARANTINE_HWAJU
+    QUARANTINE_HWAJU, fetch_hjit_freeday
 )
 
 NOTION_API = "https://api.notion.com/v1"
@@ -243,6 +243,7 @@ def build_diff(current, result, today_iso, backfill=False):
         set_date("반입시간", result.get("inboundAt"))
         set_date("반출시간", result.get("outboundAt"))
         set_text("컨테이너 번호", result.get("containerNos"))
+        set_date("컨테이너 반출기한", result.get("hjitDeadline"))
         return payload
 
     set_status("프로세스", result.get("process"))
@@ -257,6 +258,7 @@ def build_diff(current, result, today_iso, backfill=False):
     set_select("POD 터미널", result.get("podTerminal"))
     set_text("CFS 창고", result.get("cfsWarehouse"))
     set_text("컨테이너 번호", result.get("containerNos"))
+    set_date("컨테이너 반출기한", result.get("hjitDeadline"))
 
     if result.get("isManaged"):
         set_checkbox("검사대상", True)
@@ -325,6 +327,15 @@ def main():
         # 컨테이너 번호 fallback: 유니패스에 없으면 비고에서 파싱
         if not result.get("containerNos"):
             result["containerNos"] = extract_container_nos_from_remark(case["current"].get("비고"))
+
+        # HJIT 자동 조회 (POD=HJIT + 미반출 + 컨테이너 번호 있음)
+        pod_terminal = (result.get("podTerminal") or "") or (case["current"].get("POD 터미널") or "")
+        if "HJIT" in pod_terminal and not case["current"].get("반출시간") and result.get("containerNos"):
+            first_cntr = result["containerNos"].split(",")[0].strip()
+            try:
+                result["hjitDeadline"] = fetch_hjit_freeday(first_cntr)
+            except Exception as _e:
+                sys.stderr.write(f"[WARN] HJIT fetch {first_cntr}: {_e}\n")
 
         # 변경된 필드만 update
         diff = build_diff(case["current"], result, today_iso, backfill=backfill)
