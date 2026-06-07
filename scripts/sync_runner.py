@@ -20,6 +20,7 @@ cron 예시:
   0 9,14,18 * * 1-5 /usr/bin/python3 ~/unipass/sync_runner.py >> ~/.unipass.log 2>&1
 """
 import json
+import re
 import os
 import sys
 import time
@@ -192,6 +193,16 @@ def parse_chasu_page(page, token):
     }
 
 
+
+def extract_container_nos_from_remark(remark):
+    """비고 텍스트에서 컨테이너 번호 추출 (CNTR: XXX 또는 4alpha+7digit 패턴)."""
+    if not remark:
+        return None
+    # 4 alpha + 7 digit 패턴 (ISO 6346 컨테이너 번호) 전체 매칭
+    nums = re.findall(r"[A-Z]{4}\d{7}", remark.upper())
+    return ", ".join(sorted(set(nums))) if nums else None
+
+
 def build_diff(current, result, today_iso, backfill=False):
     """기존 값(current) vs 매핑 결과(result) 비교 → properties payload.
 
@@ -310,6 +321,10 @@ def main():
                 stats["no_response"] += 1
             print(f"  [{i+1}/{len(pages)}] {case['차수']:20} 스킵: {reason[:60]}")
             continue
+
+        # 컨테이너 번호 fallback: 유니패스에 없으면 비고에서 파싱
+        if not result.get("containerNos"):
+            result["containerNos"] = extract_container_nos_from_remark(case["current"].get("비고"))
 
         # 변경된 필드만 update
         diff = build_diff(case["current"], result, today_iso, backfill=backfill)
