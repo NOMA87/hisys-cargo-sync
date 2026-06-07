@@ -504,6 +504,28 @@ def build_result(parsed, hwaju, io_type):
     }
 
 
+
+
+HJIT_FREEDAY_URL = "http://59.17.254.10:9130/esvc/ers/ErsAction.do"
+
+def fetch_hjit_freeday(cntr_no, timeout=10):
+    """한진인천(HJIT) FreeDayView 조회 -> 반출기한 ISO datetime 또는 None."""
+    if not cntr_no:
+        return None
+    url = HJIT_FREEDAY_URL + "?cmd=FreeDay&contNo=" + urllib.parse.quote(cntr_no.strip())
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "hisys-cargo-sync/2.8"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+    except Exception:
+        return None
+    if "이미 반출 완료된 컨테이너" in html:
+        return None
+    m = re.search(r"반출기한[^:]*:\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", html)
+    if not m:
+        return None
+    return m.group(1).replace(" ", "T") + ":00+09:00"
+
 def decide_search_order(io, type_, hwaju=""):
     """
     검색키 우선순위 결정.
