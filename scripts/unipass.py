@@ -509,10 +509,21 @@ def build_result(parsed, hwaju, io_type):
 HJIT_FREEDAY_URL = "http://59.17.254.10:9130/esvc/ers/ErsAction.do"
 
 def fetch_hjit_freeday(cntr_no, timeout=10):
-    """한진인천(HJIT) FreeDayView 조회 -> 반출기한 ISO datetime 또는 None."""
+    """한진인천(HJIT) FreeDayView 조회 -> 반출기한 ISO datetime 또는 None.
+    
+    HJIT_PROXY_URL 환경변수 있으면 Vercel proxy 경유 (icn1 region), 없으면 직접 호출.
+    """
     if not cntr_no:
         return None
-    url = HJIT_FREEDAY_URL + "?cmd=FreeDay&contNo=" + urllib.parse.quote(cntr_no.strip())
+    proxy_url = os.environ.get("HJIT_PROXY_URL", "").strip()
+    proxy_token = os.environ.get("PROXY_TOKEN", "").strip()
+    if proxy_url:
+        params = {"contNo": cntr_no.strip()}
+        if proxy_token:
+            params["token"] = proxy_token
+        url = proxy_url + "?" + urllib.parse.urlencode(params)
+    else:
+        url = HJIT_FREEDAY_URL + "?cmd=FreeDay&contNo=" + urllib.parse.quote(cntr_no.strip())
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "hisys-cargo-sync/2.8"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
