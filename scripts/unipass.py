@@ -465,7 +465,13 @@ def build_result(parsed, hwaju, io_type):
          and "보세운송반출" not in norm(h.get("rlbrCn", ""))),
         None
     )
-    outbound_at = prcs_dttm_to_iso(outbound_row.get("prcsDttm", "") if outbound_row else "")
+    outbound_at = prcs_dttm_to_iso(outbound_row.get("prcsDttm", "") if outbound_row else "")                             
+        container_nos = sorted({
+        (h.get("cntrNo") or "").strip()
+        for h in history
+        if (h.get("cntrNo") or "").strip()
+    })
+    container_nos_str = ", ".join(container_nos) if container_nos else None
 
     return {
         "skip": False,
@@ -485,6 +491,7 @@ def build_result(parsed, hwaju, io_type):
         "shedNm": shed_nm or None,
         "podTerminal": pod_terminal,
         "cfsWarehouse": cfs_warehouse,
+        "containerNos": container_nos_str,
     }
 
 
