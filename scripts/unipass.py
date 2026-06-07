@@ -466,7 +466,7 @@ def build_result(parsed, hwaju, io_type):
         None
     )
     outbound_at = prcs_dttm_to_iso(outbound_row.get("prcsDttm", "") if outbound_row else "")                             
-        container_nos = sorted({
+    container_nos = sorted({
         (h.get("cntrNo") or "").strip()
         for h in history
         if (h.get("cntrNo") or "").strip()
