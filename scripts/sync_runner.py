@@ -231,6 +231,7 @@ def build_diff(current, result, today_iso, backfill=False):
     if backfill:
         set_date("반입시간", result.get("inboundAt"))
         set_date("반출시간", result.get("outboundAt"))
+        set_text("컨테이너 번호", result.get("containerNos"))
         return payload
 
     set_status("프로세스", result.get("process"))
@@ -244,6 +245,7 @@ def build_diff(current, result, today_iso, backfill=False):
     set_date("반출시간", result.get("outboundAt"))
     set_select("POD 터미널", result.get("podTerminal"))
     set_text("CFS 창고", result.get("cfsWarehouse"))
+    set_text("컨테이너 번호", result.get("containerNos"))
 
     if result.get("isManaged"):
         set_checkbox("검사대상", True)
