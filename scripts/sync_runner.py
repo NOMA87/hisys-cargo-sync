@@ -70,21 +70,27 @@ def notion_request(method, path, token, body=None):
         raise RuntimeError(f"Notion API {method} {path} → {e.code}: {body}")
 
 
-def query_chasu_db(token, ds_id, page_size=100):
-    """차수 DB query (페이지네이션 처리). 필터/정렬 적용."""
+def query_chasu_db(token, ds_id, page_size=100, backfill=False):
+    """차수 DB query (페이지네이션 처리). 필터/정렬 적용.
+
+    v2.5 backfill 모드:
+        BACKFILL=1 환경변수 시 '프로세스 ≠ 반출완료' 조건 제외 → 모든 수입 차수 query.
+        반입시간/반출시간만 PATCH (다른 필드는 미변경).
+    """
     pages = []
     start_cursor = None
+    filter_and = [
+        {"property": "입력완료√", "checkbox": {"equals": True}},
+        {"or": [
+            {"property": "I/O", "select": {"equals": "해상수입"}},
+            {"property": "I/O", "select": {"equals": "항공수입"}},
+        ]},
+    ]
+    if not backfill:
+        # 평소엔 반출완료 제외 (이미 끝난 차수는 다시 안 봄)
+        filter_and.insert(1, {"property": "프로세스", "status": {"does_not_equal": "반출완료"}})
     body_template = {
-        "filter": {
-            "and": [
-                {"property": "입력완료√", "checkbox": {"equals": True}},
-                {"property": "프로세스", "status": {"does_not_equal": "반출완료"}},
-                {"or": [
-                    {"property": "I/O", "select": {"equals": "해상수입"}},
-                    {"property": "I/O", "select": {"equals": "항공수입"}},
-                ]},
-            ]
-        },
+        "filter": {"and": filter_and},
         "sorts": [{"property": "최종 편집 일시", "direction": "descending"}],
         "page_size": page_size,
     }
@@ -137,7 +143,7 @@ def get_hwaju_name(token, relation_ids):
         return cached
     try:
         page = notion_request("GET", f"/pages/{pid}", token)
-        # 일반적으로 첛 title property가 화주명
+        # 일반적으로 첫 title property가 화주명
         for name, prop in page.get("properties", {}).items():
             if prop.get("type") == "title":
                 arr = prop.get("title", [])
@@ -186,8 +192,11 @@ def parse_chasu_page(page, token):
     }
 
 
-def build_diff(current, result, today_iso):
-    """기존 값(current) vs 매핑 결과(result) 비교 → properties payload."""
+def build_diff(current, result, today_iso, backfill=False):
+    """기존 값(current) vs 매핑 결과(result) 비교 → properties payload.
+
+    v2.5 backfill 모드: 반입시간/반출시간만 PATCH (다른 필드는 안 건드림).
+    """
     payload = {}
 
     def set_text(field, new_val):
@@ -217,6 +226,12 @@ def build_diff(current, result, today_iso):
     def set_checkbox(field, new_val):
         if current.get(field) != new_val:
             payload[field] = {"checkbox": new_val}
+
+    # backfill 모드: 반입시간/반출시간만 PATCH (다른 필드 건드리지 않음)
+    if backfill:
+        set_date("반입시간", result.get("inboundAt"))
+        set_date("반출시간", result.get("outboundAt"))
+        return payload
 
     set_status("프로세스", result.get("process"))
     set_date("ETA", result.get("eta"))
@@ -255,9 +270,12 @@ def main():
     # UUID 형태로 복원
     ds_id = f"{ds_id[0:8]}-{ds_id[8:12]}-{ds_id[12:16]}-{ds_id[16:20]}-{ds_id[20:32]}"
 
-    print(f"[{datetime.now().isoformat()}] 동기화 시작 (DS: {ds_id})")
+    # v2.5: BACKFILL 모드 (모든 수입 차수 대상으로 반입/반출시간만 채움)
+    backfill = os.environ.get("BACKFILL", "").lower() in ("1", "true", "yes")
+    mode_label = "BACKFILL 모드 (반출완료 포함, 반입/반출시간만)" if backfill else "일반 모드"
+    print(f"[{datetime.now().isoformat()}] 동기화 시작 (DS: {ds_id}) [{mode_label}]")
 
-    pages = query_chasu_db(notion_token, ds_id)
+    pages = query_chasu_db(notion_token, ds_id, backfill=backfill)
     print(f"  대상 차수: {len(pages)}건")
 
     stats = {"total": len(pages), "updated": 0, "no_change": 0,
@@ -286,13 +304,13 @@ def main():
         if result.get("skip"):
             reason = result.get("reason", "")
             stats["skipped"] += 1
-            if "응답 헤더 없음" in reason or "적하목록" in reason:
+            if "응답 헤더 없음" in reason or "적핟목록" in reason:
                 stats["no_response"] += 1
             print(f"  [{i+1}/{len(pages)}] {case['차수']:20} 스킵: {reason[:60]}")
             continue
 
         # 변경된 필드만 update
-        diff = build_diff(case["current"], result, today_iso)
+        diff = build_diff(case["current"], result, today_iso, backfill=backfill)
         if not diff:
             stats["no_change"] += 1
             print(f"  [{i+1}/{len(pages)}] {case['차수']:20} 변경 없음")
