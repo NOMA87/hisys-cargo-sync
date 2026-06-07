@@ -532,10 +532,15 @@ def fetch_hjit_freeday(cntr_no, timeout=10):
         return None
     if "이미 반출 완료된 컨테이너" in html:
         return None
-    m = re.search(r"FreeTime[\s\S]{0,500}?(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", html)
+    # 1차: input name=freeTime value 직접 매칭 (가장 안전)
+    m = re.search(r'name="freeTime"[^>]*value="\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})', html)
+    # 2차 fallback: FreeTime 라벨 주변 lazy 매칭
     if not m:
+        m = re.search(r"FreeTime[\s\S]{0,500}?(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", html)
+    if not m:
+        sys.stderr.write(f"[WARN] HJIT FreeTime not matched. html_len={len(html)} has_FreeTime={'FreeTime' in html} has_freeTime={'freeTime' in html}\n")
         return None
-    return m.group(1).replace(" ", "T") + ":00+09:00"
+    return m.group(1).strip().replace(" ", "T") + ":00+09:00"
 
 def decide_search_order(io, type_, hwaju=""):
     """
