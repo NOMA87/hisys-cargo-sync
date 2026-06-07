@@ -287,6 +287,20 @@ def yyyymmdd_to_iso(s):
     return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
 
 
+def prcs_dttm_to_iso(s):
+    """prcsDttm(YYYYMMDDHHMMSS) → ISO 8601 datetime with KST (+09:00).
+    8자리만 있으면 yyyymmdd로 fallback (시간 0시).
+    """
+    if not s:
+        return None
+    s = s.strip()
+    if len(s) >= 14:
+        return f"{s[0:4]}-{s[4:6]}-{s[6:8]}T{s[8:10]}:{s[10:12]}:{s[12:14]}+09:00"
+    if len(s) >= 8:
+        return f"{s[0:4]}-{s[4:6]}-{s[6:8]}"
+    return None
+
+
 def map_process(history, hwaju):
     """진행이력 → 프로세스 옵션명"""
     candidates = []
@@ -360,7 +374,7 @@ def build_result(parsed, hwaju, io_type):
     if parsed.get("_error"):
         return {"skip": True, "reason": "API 오류: " + parsed["_error"]}
     if parsed.get("_empty"):
-        return {"skip": True, "reason": "응답 헤더 없음 (적하목록 미접수)", "process": "미반영"}
+        return {"skip": True, "reason": "응답 헤더 없음 (적핟목록 미접수)", "process": "미반영"}
     if parsed.get("_multi"):
         return {"skip": True, "reason": "다건 응답 - 보조키(MBL/cargMtNo) 필요"}
 
@@ -433,6 +447,16 @@ def build_result(parsed, hwaju, io_type):
 
     shed_nm = header_shed or (cy_row.get("shedNm", "") if cy_row else "")
 
+    # 최종 반입시간 (v2.3): 반입신고 중 가장 늦은 prcsDttm
+    # - FCL/항공: 단일 반입신고 → 그 시점
+    # - LCL: 입항반입 + 보세운송반입 2건 → 최종(보세운송반입) 시점
+    inbound_rows = [
+        h for h in history
+        if norm(h.get("cargTrcnRelaBsopTpcd", "")) == "반입신고"
+    ]
+    last_inbound = max(inbound_rows, key=lambda h: h.get("prcsDttm", "") or "", default=None)
+    inbound_at = prcs_dttm_to_iso(last_inbound.get("prcsDttm", "") if last_inbound else "")
+
     return {
         "skip": False,
         "reason": "정상 매핑" if process != "미반영" else "매핑 가능 단계 없음",
@@ -443,6 +467,7 @@ def build_result(parsed, hwaju, io_type):
         "customsClearedAt": yyyymmdd_to_iso((import_decl.get("prcsDttm", "")[:8] if import_decl else "")),
         "quarantineDeclNo": (quar.get("dclrNo") if quar else None) or None,
         "quarantineAt": yyyymmdd_to_iso((quar.get("prcsDttm", "")[:8] if quar else "")),
+        "inboundAt": inbound_at,
         "isManaged": header.get("mtTrgtCargYnNm", "") == "Y",
         "shipNm": header.get("shipNm") or None,
         "vydf": header.get("vydf") or None,
