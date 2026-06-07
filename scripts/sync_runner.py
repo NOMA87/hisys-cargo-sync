@@ -176,6 +176,7 @@ def parse_chasu_page(page, token):
             "화물관리번호": extract_prop(props, "화물관리번호", "rich_text"),
             "검역신고번호": extract_prop(props, "검역신고번호", "rich_text"),
             "검역완료일": extract_prop(props, "검역완료일", "date"),
+            "반입시간": extract_prop(props, "반입시간", "date"),
             "POD 터미널": extract_prop(props, "POD 터미널", "select"),
             "CFS 창고": extract_prop(props, "CFS 창고", "rich_text"),
             "검사대상": extract_prop(props, "검사대상", "checkbox"),
@@ -223,6 +224,7 @@ def build_diff(current, result, today_iso):
     set_date("수입신고수리일", result.get("customsClearedAt"))
     set_text("검역신고번호", result.get("quarantineDeclNo"))
     set_date("검역완료일", result.get("quarantineAt"))
+    set_date("반입시간", result.get("inboundAt"))
     set_select("POD 터미널", result.get("podTerminal"))
     set_text("CFS 창고", result.get("cfsWarehouse"))
 
@@ -282,7 +284,7 @@ def main():
         if result.get("skip"):
             reason = result.get("reason", "")
             stats["skipped"] += 1
-            if "응답 헤더 없음" in reason or "적하목록" in reason:
+            if "응답 헤더 없음" in reason or "적핟목록" in reason:
                 stats["no_response"] += 1
             print(f"  [{i+1}/{len(pages)}] {case['차수']:20} 스킵: {reason[:60]}")
             continue
