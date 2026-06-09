@@ -330,12 +330,20 @@ def main():
 
         # HJIT 자동 조회 (POD=HJIT + 미반출 + 컨테이너 번호 있음)
         pod_terminal = (result.get("podTerminal") or "") or (case["current"].get("POD 터미널") or "")
-        if "HJIT" in pod_terminal and not case["current"].get("반출시간") and result.get("containerNos"):
+        _is_hjit = "HJIT" in pod_terminal
+        _has_cntr = bool(result.get("containerNos"))
+        _no_outbound = not case["current"].get("반출시간")
+        if _is_hjit and _no_outbound and _has_cntr:
             first_cntr = result["containerNos"].split(",")[0].strip()
+            print(f"  [HJIT-DEBUG] {case['차수']}: try fetch cntr={first_cntr} proxy={'set' if os.environ.get('HJIT_PROXY_URL') else 'EMPTY'}")
             try:
-                result["hjitDeadline"] = fetch_hjit_freeday(first_cntr)
+                _d = fetch_hjit_freeday(first_cntr)
+                result["hjitDeadline"] = _d
+                print(f"  [HJIT-DEBUG] {case['차수']}: result={_d}")
             except Exception as _e:
-                sys.stderr.write(f"[WARN] HJIT fetch {first_cntr}: {_e}\n")
+                print(f"  [HJIT-ERROR] {case['차수']}: {type(_e).__name__}: {_e}")
+        elif _is_hjit:
+            print(f"  [HJIT-SKIP] {case['차수']}: hjit={_is_hjit} no_outbound={_no_outbound} has_cntr={_has_cntr}")
 
         # 변경된 필드만 update
         diff = build_diff(case["current"], result, today_iso, backfill=backfill)
