@@ -532,9 +532,8 @@ def fetch_hjit_freeday(cntr_no, timeout=10):
     except Exception as _e:
         print(f"  [HJIT-FN-ERR] {type(_e).__name__}: {_e}", flush=True)
         return None
-    if "이미 반출 완료된 컨테이너" in html:
-        print(f"  [HJIT-FN] '이미 반출 완료' detected -> None", flush=True)
-        return None
+    # 안내 문구 "이미 반출 완료된 컨테이너는 조회되지 않습니다"는 항상 표시되므로 검사하지 않음
+    # FreeTime 매치 결과로만 판단
     # 1차: input name=freeTime value 직접 매칭 (가장 안전)
     m = re.search(r'name="freeTime"[^>]*value="\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})', html)
     # 2차 fallback: FreeTime 라벨 주변 lazy 매칭
