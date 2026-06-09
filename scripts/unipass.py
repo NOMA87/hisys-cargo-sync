@@ -528,9 +528,12 @@ def fetch_hjit_freeday(cntr_no, timeout=10):
         req = urllib.request.Request(url, headers={"User-Agent": "hisys-cargo-sync/2.8"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             html = resp.read().decode("utf-8", errors="replace")
-    except Exception:
+        print(f"  [HJIT-FN] url_tail=...{url[-50:]} html_len={len(html)} status_in_resp={resp.status}", flush=True)
+    except Exception as _e:
+        print(f"  [HJIT-FN-ERR] {type(_e).__name__}: {_e}", flush=True)
         return None
     if "이미 반출 완료된 컨테이너" in html:
+        print(f"  [HJIT-FN] '이미 반출 완료' detected -> None", flush=True)
         return None
     # 1차: input name=freeTime value 직접 매칭 (가장 안전)
     m = re.search(r'name="freeTime"[^>]*value="\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})', html)
@@ -538,7 +541,7 @@ def fetch_hjit_freeday(cntr_no, timeout=10):
     if not m:
         m = re.search(r"FreeTime[\s\S]{0,500}?(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", html)
     if not m:
-        sys.stderr.write(f"[WARN] HJIT FreeTime not matched. html_len={len(html)} has_FreeTime={'FreeTime' in html} has_freeTime={'freeTime' in html}\n")
+        print(f"  [HJIT-FN-NOMATCH] html_len={len(html)} has_FreeTime={'FreeTime' in html} has_freeTime={'freeTime' in html} html_start={html[:200]!r}", flush=True)
         return None
     return m.group(1).strip().replace(" ", "T") + ":00+09:00"
 
