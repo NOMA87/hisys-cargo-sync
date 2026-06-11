@@ -26,7 +26,7 @@ import sys
 import time
 import urllib.request
 import urllib.error
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -34,7 +34,7 @@ sys.path.insert(0, SCRIPT_DIR)
 
 from unipass import (
     get_api_key, fetch_with_fallback, build_result, is_invalid_bl, norm,
-    QUARANTINE_HWAJU, fetch_hjit_freeday
+    QUARANTINE_HWAJU, fetch_hjit_freeday, fetch_kmtc_schedule, match_kmtc_vessel
 )
 
 NOTION_API = "https://api.notion.com/v1"
@@ -185,6 +185,10 @@ def parse_chasu_page(page, token):
             "검역완료일": extract_prop(props, "검역완료일", "date"),
             "반입시간": extract_prop(props, "반입시간", "date"),
             "반출시간": extract_prop(props, "반출시간", "date"),
+            "POL": extract_prop(props, "POL", "select"),
+            "POD": extract_prop(props, "POD", "select"),
+            "선명&항차": extract_prop(props, "선명&항차", "rich_text"),
+            "ETD": extract_prop(props, "ETD", "date"),
             "POD 터미널": extract_prop(props, "POD 터미널", "select"),
             "CFS 창고": extract_prop(props, "CFS 창고", "rich_text"),
             "검사대상": extract_prop(props, "검사대상", "checkbox"),
@@ -247,7 +251,8 @@ def build_diff(current, result, today_iso, backfill=False):
         return payload
 
     set_status("프로세스", result.get("process"))
-    set_date("ETA", result.get("eta"))
+    set_date("ETA", result.get("kmtcEta") or result.get("eta"))
+    set_date("ETD", result.get("kmtcEtd"))
     set_text("화물관리번호", result.get("cargMtNo"))
     set_text("수입신고번호", result.get("importDeclNo"))
     set_date("수입신고수리일", result.get("customsClearedAt"))
@@ -344,6 +349,35 @@ def main():
                 print(f"  [HJIT-ERROR] {case['차수']}: {type(_e).__name__}: {_e}")
         elif _is_hjit:
             print(f"  [HJIT-SKIP] {case['차수']}: hjit={_is_hjit} no_outbound={_no_outbound} has_cntr={_has_cntr}")
+
+        # KMTC 자동 조회 (태주 차수, POL/POD/선명 있음)
+        if "태주" in case["차수"] and case["io"] == "해상수입" and case["type"] == "FCL":
+            pol_un = (case["current"].get("POL") or "").upper()
+            pod_un = (case["current"].get("POD") or "").upper()
+            vessel_str = case["current"].get("선명&항차") or ""
+            etd_or_eta = case["current"].get("ETD") or case["current"].get("ETA")
+            if etd_or_eta and len(etd_or_eta) >= 10:
+                try:
+                    dt = datetime.strptime(etd_or_eta[:10], "%Y-%m-%d") - timedelta(days=3)
+                    period_date = dt.strftime("%Y%m%d")
+                except Exception:
+                    period_date = datetime.now().strftime("%Y%m%d")
+            else:
+                period_date = datetime.now().strftime("%Y%m%d")
+            if pol_un and pod_un and vessel_str:
+                try:
+                    vessels = fetch_kmtc_schedule(pol_un, pod_un, period_date, 2)
+                    matched = match_kmtc_vessel(vessels, vessel_str)
+                    if matched:
+                        if matched.get("etd"):
+                            result["kmtcEtd"] = matched["etd"] + "+09:00"
+                        if matched.get("eta"):
+                            result["kmtcEta"] = matched["eta"] + "+09:00"
+                        print(f"  [KMTC-MATCH] {case['차수']}: {matched['vesselName']} {matched['voyageNumber']} ETD={matched.get('etd')} ETA={matched.get('eta')}")
+                    else:
+                        print(f"  [KMTC-NOMATCH] {case['차수']}: vessel='{vessel_str}' pol={pol_un} pod={pod_un}")
+                except Exception as _e:
+                    print(f"  [KMTC-ERR] {case['차수']}: {_e}")
 
         # 변경된 필드만 update
         diff = build_diff(case["current"], result, today_iso, backfill=backfill)
