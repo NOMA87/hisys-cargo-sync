@@ -44,6 +44,7 @@ jobs:
           UNIPASS_PROXY_URL: ${{ secrets.UNIPASS_PROXY_URL }}
           PROXY_TOKEN: ${{ secrets.PROXY_TOKEN }}
           HJIT_PROXY_URL: ${{ secrets.HJIT_PROXY_URL }}
+          KMTC_PROXY_URL: ${{ secrets.KMTC_PROXY_URL }}
           PYTHONIOENCODING: utf-8
           BACKFILL: ${{ inputs.backfill }}
         run: |
