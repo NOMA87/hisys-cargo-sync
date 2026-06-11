@@ -546,6 +546,87 @@ def fetch_hjit_freeday(cntr_no, timeout=10):
         return None
     return m.group(1).strip().replace(" ", "T") + ":00+09:00"
 
+
+
+# === KMTC ptpSchedule 통합 (v2.9) ===
+# UN/LOCODE → KMTC 3자 코드 매핑 (태주 외 화주도 추후 확장)
+KMTC_PORT_MAP = {
+    "CNTAC": "TCG",  # TAICANG
+    "CNSHA": "SHA",  # SHANGHAI
+    "CNNGB": "NBO",  # NINGBO
+    "CNXMN": "XMN",  # XIAMEN
+    "KRINC": "INC",  # INCHEON
+    "KRPUS": "PUS",  # BUSAN
+    "KRPTK": "PTK",  # PYEONGTAEK
+}
+
+
+def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4):
+    """KMTC ptpSchedule 호출 -> vessel 리스트.
+    
+    pol_un, pod_un: UN/LOCODE (예: CNTAC, KRINC)
+    period_date: YYYYMMDD
+    week_term: 1-4
+    Returns: [{vesselName, voyageNumber, vesselDepartureDate, vesselArrivalDate, loadPortCode, dischargePortCode}, ...]
+    """
+    proxy_url = os.environ.get("KMTC_PROXY_URL", "").strip()
+    if not proxy_url:
+        return []
+    kmtc_from = KMTC_PORT_MAP.get((pol_un or "").upper())
+    kmtc_to = KMTC_PORT_MAP.get((pod_un or "").upper())
+    if not kmtc_from or not kmtc_to:
+        return []
+    params = urllib.parse.urlencode({
+        "fromLocationCode": kmtc_from,
+        "toLocationCode": kmtc_to,
+        "periodDate": period_date,
+        "weekTerm": str(week_term),
+        "webPriority": "A"
+    })
+    url = proxy_url + "?" + params
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "hisys-cargo-sync/2.9"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return []
+    vessels = []
+    for sched in data if isinstance(data, list) else []:
+        for v in sched.get("vessel", []):
+            if v.get("vesselName"):
+                vessels.append({
+                    "vesselName": v.get("vesselName", "").strip(),
+                    "voyageNumber": (v.get("voyageNumber") or "").strip(),
+                    "etd": v.get("vesselDepartureDate"),
+                    "eta": v.get("vesselArrivalDate"),
+                    "loadPort": v.get("loadPortCode"),
+                    "dischargePort": v.get("dischargePortCode"),
+                })
+    return vessels
+
+
+def match_kmtc_vessel(vessels, vessel_name_str):
+    """차수의 '선명&항차' 문자열로 KMTC vessel 리스트에서 매칭.
+    
+    예: 'KAI PING 586E' -> name='KAI PING', voy='586E'
+    """
+    if not vessels or not vessel_name_str:
+        return None
+    # 마지막 토큰을 항차로 간주
+    parts = vessel_name_str.strip().split()
+    if len(parts) < 2:
+        return None
+    voy = parts[-1].upper()
+    name = " ".join(parts[:-1]).upper()
+    for v in vessels:
+        v_name = v["vesselName"].upper()
+        v_voy = v["voyageNumber"].upper()
+        # 선명 부분 일치 + 항차 부분 일치
+        if name in v_name and voy in v_voy:
+            return v
+    return None
+
+
 def decide_search_order(io, type_, hwaju=""):
     """
     검색키 우선순위 결정.
