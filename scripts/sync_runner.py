@@ -350,8 +350,8 @@ def main():
         elif _is_hjit:
             print(f"  [HJIT-SKIP] {case['차수']}: hjit={_is_hjit} no_outbound={_no_outbound} has_cntr={_has_cntr}")
 
-        # KMTC 자동 조회 (태주 차수, POL/POD/선명 있음)
-        if "태주" in case["차수"] and case["io"] == "해상수입" and case["type"] == "FCL":
+        # KMTC 자동 조회 (모든 해상수출입 FCL 차수)
+        if case["io"] in ("해상수입", "해상수출") and case["type"] == "FCL":
             pol_un = (case["current"].get("POL") or "").upper()
             pod_un = (case["current"].get("POD") or "").upper()
             vessel_str = case["current"].get("선명&항차") or ""
