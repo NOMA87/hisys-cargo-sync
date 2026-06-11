@@ -551,13 +551,48 @@ def fetch_hjit_freeday(cntr_no, timeout=10):
 # === KMTC ptpSchedule 통합 (v2.9) ===
 # UN/LOCODE → KMTC 3자 코드 매핑 (태주 외 화주도 추후 확장)
 KMTC_PORT_MAP = {
+    # 중국
     "CNTAC": "TCG",  # TAICANG
     "CNSHA": "SHA",  # SHANGHAI
     "CNNGB": "NBO",  # NINGBO
     "CNXMN": "XMN",  # XIAMEN
+    "CNNSA": "NSA",  # NANSHA (광저우)
+    "CNDAL": "DLN",  # DALIAN
+    "CNQIN": "QIN",  # QINGDAO
+    "CNTSN": "TXG",  # TIANJIN (XINGANG)
+    "CNYTN": "YTN",  # YANTIAN (선전)
+    "CNSZX": "SHK",  # SHEKOU (선전)
+    # 한국
     "KRINC": "INC",  # INCHEON
     "KRPUS": "PUS",  # BUSAN
     "KRPTK": "PTK",  # PYEONGTAEK
+    "KRKWA": "KAN",  # GWANGYANG
+    "KRUSN": "USN",  # ULSAN
+    # 일본
+    "JPTKY": "TYO",  # TOKYO
+    "JPYOK": "YOK",  # YOKOHAMA
+    "JPHKT": "HKT",  # HAKATA
+    "JPKOB": "KOB",  # KOBE
+    "JPOSA": "OSA",  # OSAKA
+    "JPMOJ": "MOJ",  # MOJI
+    # 동남아
+    "MYPKG": "PKG",  # PORT KLANG
+    "MYPEN": "PEN",  # PENANG
+    "VNHCM": "HCM",  # HO CHI MINH (CATLAI)
+    "VNHPH": "HPH",  # HAIPHONG
+    "THLCH": "LCB",  # LAEM CHABANG
+    "THBKK": "BKK",  # BANGKOK
+    "HKHKG": "HKG",  # HONG KONG
+    "SGSIN": "SIN",  # SINGAPORE
+    "IDJKT": "JKT",  # JAKARTA
+    "PHMNL": "MNL",  # MANILA
+    "TWKHH": "KHH",  # KAOHSIUNG
+    "TWTPE": "TPE",  # TAIPEI
+    # 남아시아
+    "PKKHI": "KHI",  # KARACHI
+    "INNSA": "NSA",  # NHAVA SHEVA (인도)
+    "BDCGP": "CGP",  # CHITTAGONG
+    "LKCMB": "CMB",  # COLOMBO
 }
 
 
