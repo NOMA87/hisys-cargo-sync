@@ -43,7 +43,10 @@ def query_target_chasu(token, ds_id):
     body_template = {
         "filter": {"and": [
             {"property": "입력완료√", "checkbox": {"equals": True}},
-            {"property": "반입시간", "date": {"is_empty": True}},
+            {"or": [
+                {"property": "프로세스", "status": {"equals": "미반영"}},
+                {"property": "프로세스", "status": {"is_empty": True}},
+            ]},
             {"or": [
                 {"property": "I/O", "select": {"equals": "해상수입"}},
                 {"property": "I/O", "select": {"equals": "해상수출"}},
@@ -97,7 +100,7 @@ def main():
 
     print(f"[{started.isoformat()}] KMTC 동기화 시작 (DS: {ds_id})")
     pages = query_target_chasu(notion_token, ds_id)
-    print(f"  대상 차수: {len(pages)}건 (입력완료 + 미입항 + 해상)")
+    print(f"  대상 차수: {len(pages)}건 (입력완료 + 프로세스=미반영 + 해상)")
 
     stats = {"total": len(pages), "matched": 0, "nomatch": 0, "skipped": 0, "errored": 0}
 
