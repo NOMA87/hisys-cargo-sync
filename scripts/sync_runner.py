@@ -251,10 +251,9 @@ def build_diff(current, result, today_iso, backfill=False):
         return payload
 
     set_status("프로세스", result.get("process"))
-    # ETA 우선순위 (v2.11): 실제 입항 > KMTC > 유니패스 etprDt
-    eta_val = result.get("shipArrivalAt") or result.get("kmtcEta") or result.get("eta")
+    # ETA 우선순위 (v2.12): 실제 입항 > 유니패스 etprDt (KMTC는 별도 워크플로)
+    eta_val = result.get("shipArrivalAt") or result.get("eta")
     set_date("ETA", eta_val)
-    set_date("ETD", result.get("kmtcEtd"))
     if eta_val:
         set_date("캘린더 표기", eta_val[:10])
     set_text("화물관리번호", result.get("cargMtNo"))
@@ -353,35 +352,6 @@ def main():
                 print(f"  [HJIT-ERROR] {case['차수']}: {type(_e).__name__}: {_e}")
         elif _is_hjit:
             print(f"  [HJIT-SKIP] {case['차수']}: hjit={_is_hjit} no_outbound={_no_outbound} has_cntr={_has_cntr}")
-
-        # KMTC 자동 조회 (모든 해상수출입 FCL 차수)
-        if case["io"] in ("해상수입", "해상수출") and case["type"] == "FCL":
-            pol_un = (case["current"].get("POL") or "").upper()
-            pod_un = (case["current"].get("POD") or "").upper()
-            vessel_str = case["current"].get("선명&항차") or ""
-            etd_or_eta = case["current"].get("ETD") or case["current"].get("ETA")
-            if etd_or_eta and len(etd_or_eta) >= 10:
-                try:
-                    dt = datetime.strptime(etd_or_eta[:10], "%Y-%m-%d") - timedelta(days=3)
-                    period_date = dt.strftime("%Y%m%d")
-                except Exception:
-                    period_date = datetime.now().strftime("%Y%m%d")
-            else:
-                period_date = datetime.now().strftime("%Y%m%d")
-            if pol_un and pod_un and vessel_str:
-                try:
-                    vessels = fetch_kmtc_schedule(pol_un, pod_un, period_date, 2)
-                    matched = match_kmtc_vessel(vessels, vessel_str)
-                    if matched:
-                        if matched.get("etd"):
-                            result["kmtcEtd"] = matched["etd"] + "+09:00"
-                        if matched.get("eta"):
-                            result["kmtcEta"] = matched["eta"] + "+09:00"
-                        print(f"  [KMTC-MATCH] {case['차수']}: {matched['vesselName']} {matched['voyageNumber']} ETD={matched.get('etd')} ETA={matched.get('eta')}")
-                    else:
-                        print(f"  [KMTC-NOMATCH] {case['차수']}: vessel='{vessel_str}' pol={pol_un} pod={pod_un}")
-                except Exception as _e:
-                    print(f"  [KMTC-ERR] {case['차수']}: {_e}")
 
         # 변경된 필드만 update
         diff = build_diff(case["current"], result, today_iso, backfill=backfill)
