@@ -467,7 +467,15 @@ def build_result(parsed, hwaju, io_type):
          and "보세운송반출" not in norm(h.get("rlbrCn", ""))),
         None
     )
-    outbound_at = prcs_dttm_to_iso(outbound_row.get("prcsDttm", "") if outbound_row else "")                             
+    outbound_at = prcs_dttm_to_iso(outbound_row.get("prcsDttm", "") if outbound_row else "")
+
+    # 실제 본선 입항 시각 (v2.11): "입항보고" 단계 prcsDttm
+    ship_arrival_row = next(
+        (h for h in history
+         if norm(h.get("cargTrcnRelaBsopTpcd", "")) in ("입항보고", "입항보고수리", "입항적재화물목록심사완료")),
+        None
+    )
+    ship_arrival_at = prcs_dttm_to_iso(ship_arrival_row.get("prcsDttm", "") if ship_arrival_row else "")                             
     # 컨테이너 번호 수집 (v2.7): history + header 다중 필드 + 패턴 매칭
     _cntr_re = re.compile(r"^[A-Z]{4}\d{7}$")
     _cntr_set = set()
@@ -503,6 +511,7 @@ def build_result(parsed, hwaju, io_type):
         "podTerminal": pod_terminal,
         "cfsWarehouse": cfs_warehouse,
         "containerNos": container_nos_str,
+        "shipArrivalAt": ship_arrival_at,
     }
 
 
