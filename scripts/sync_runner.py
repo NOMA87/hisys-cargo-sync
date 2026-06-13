@@ -251,8 +251,12 @@ def build_diff(current, result, today_iso, backfill=False):
         return payload
 
     set_status("프로세스", result.get("process"))
-    set_date("ETA", result.get("kmtcEta") or result.get("eta"))
+    # ETA 우선순위 (v2.11): 실제 입항 > KMTC > 유니패스 etprDt
+    eta_val = result.get("shipArrivalAt") or result.get("kmtcEta") or result.get("eta")
+    set_date("ETA", eta_val)
     set_date("ETD", result.get("kmtcEtd"))
+    if eta_val:
+        set_date("캘린더 표기", eta_val[:10])
     set_text("화물관리번호", result.get("cargMtNo"))
     set_text("수입신고번호", result.get("importDeclNo"))
     set_date("수입신고수리일", result.get("customsClearedAt"))
