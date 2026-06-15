@@ -469,13 +469,14 @@ def build_result(parsed, hwaju, io_type):
     )
     outbound_at = prcs_dttm_to_iso(outbound_row.get("prcsDttm", "") if outbound_row else "")
 
-    # 실제 본선 입항 시각 (v2.11): "입항보고" 단계 prcsDttm
-    ship_arrival_row = next(
-        (h for h in history
-         if norm(h.get("cargTrcnRelaBsopTpcd", "")) in ("입항보고", "입항보고수리", "입항적재화물목록심사완료")),
-        None
-    )
-    ship_arrival_at = prcs_dttm_to_iso(ship_arrival_row.get("prcsDttm", "") if ship_arrival_row else "")                             
+    # 실제 본선 입항 시각 (v2.13): "입항보고" 단계 row 중 가장 최근 prcsDttm
+    # (본선 변경 케이스에서 이전 본선의 옛 row가 잡히는 문제 해결)
+    ship_arrival_rows = [
+        h for h in history
+        if norm(h.get("cargTrcnRelaBsopTpcd", "")) in ("입항보고", "입항보고수리", "입항적재화물목록심사완료")
+    ]
+    last_ship_arrival = max(ship_arrival_rows, key=lambda h: h.get("prcsDttm", "") or "", default=None)
+    ship_arrival_at = prcs_dttm_to_iso(last_ship_arrival.get("prcsDttm", "") if last_ship_arrival else "")                             
     # 컨테이너 번호 수집 (v2.7): history + header 다중 필드 + 패턴 매칭
     _cntr_re = re.compile(r"^[A-Z]{4}\d{7}$")
     _cntr_set = set()
