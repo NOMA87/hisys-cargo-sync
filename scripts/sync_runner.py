@@ -223,7 +223,11 @@ def build_diff(current, result, today_iso, backfill=False):
     def set_date(field, new_val):
         if not new_val:
             return
-        if current.get(field) != new_val:
+        cur_val = current.get(field) or ""
+        # v2.15: 기존이 datetime이고 일자가 동일하면 PATCH skip (KMTC가 부착한 시간 보존)
+        if cur_val and len(cur_val) > 10 and new_val[:10] == cur_val[:10]:
+            return
+        if cur_val != new_val:
             payload[field] = {"date": {"start": new_val}}
 
     def set_status(field, new_val):
@@ -251,8 +255,8 @@ def build_diff(current, result, today_iso, backfill=False):
         return payload
 
     set_status("프로세스", result.get("process"))
-    # ETA 우선순위 (v2.12): 실제 입항 > 유니패스 etprDt (KMTC는 별도 워크플로)
-    eta_val = result.get("shipArrivalAt") or result.get("eta")
+    # ETA 분담 (v2.15): 유니패스 = etprDt 일자만, 시간은 KMTC sync가 부착
+    eta_val = result.get("eta")  # etprDt 일자
     set_date("ETA", eta_val)
     if eta_val:
         set_date("캘린더 표기", eta_val[:10])
