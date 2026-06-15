@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """
-KMTC ptpSchedule 전용 동기화 (v1.0)
+KMTC ptpSchedule 전용 동기화 (v1.1)
 
-- 입력완료 ✓ + 반입시간 없음(미입항) 차수 대상
+- 입력완료 ✓ + 프로세스 ∈ [미반영, 입항보고] OR is_empty
 - FCL + LCL + 해상수출입 모두 처리
 - 차수의 선명&항차로 KMTC 본선 매칭 → ETD/ETA + 캘린더 표기 PATCH
 - 매시간 cron 실행 (별도 workflow)
+
+v1.1 변경점:
+- 필터에 "입항보고" 단계 추가 (본선 출항 직후 케이스 보강)
+- 입항보고 단계 차수는 ETD만 갱신, ETA/캘린더는 스킵
+  (유니패스 etprDt가 이미 정확한 실제 입항일을 보유, KMTC 예정값으로 덮으면 퇴행)
 """
 import json
 import os
@@ -37,7 +42,7 @@ def notion_request(method, path, token, body=None):
 
 
 def query_target_chasu(token, ds_id):
-    """입력완료 + 반입시간 없음 + 해상 + FCL/LCL 차수 query."""
+    """입력완료 + 프로세스(미반영|입항보고|비어있음) + 해상 차수 query."""
     pages = []
     cursor = None
     body_template = {
@@ -45,6 +50,7 @@ def query_target_chasu(token, ds_id):
             {"property": "입력완료√", "checkbox": {"equals": True}},
             {"or": [
                 {"property": "프로세스", "status": {"equals": "미반영"}},
+                {"property": "프로세스", "status": {"equals": "입항보고"}},
                 {"property": "프로세스", "status": {"is_empty": True}},
             ]},
             {"or": [
@@ -79,6 +85,9 @@ def extract_prop(props, name, kind):
     if kind == "select":
         s = p.get("select")
         return s.get("name") if s else None
+    if kind == "status":
+        s = p.get("status")
+        return s.get("name") if s else None
     if kind == "date":
         d = p.get("date")
         return d.get("start") if d else None
@@ -100,9 +109,9 @@ def main():
 
     print(f"[{started.isoformat()}] KMTC 동기화 시작 (DS: {ds_id})")
     pages = query_target_chasu(notion_token, ds_id)
-    print(f"  대상 차수: {len(pages)}건 (입력완료 + 프로세스=미반영 + 해상)")
+    print(f"  대상 차수: {len(pages)}건 (입력완료 + 프로세스∈[미반영,입항보고] + 해상)")
 
-    stats = {"total": len(pages), "matched": 0, "nomatch": 0, "skipped": 0, "errored": 0}
+    stats = {"total": len(pages), "matched": 0, "etd_only": 0, "nomatch": 0, "skipped": 0, "errored": 0}
 
     for i, page in enumerate(pages):
         props = page.get("properties", {})
@@ -114,6 +123,10 @@ def main():
         vessel_str = extract_prop(props, "선명&항차", "rich_text") or ""
         etd = extract_prop(props, "ETD", "date") or ""
         eta = extract_prop(props, "ETA", "date") or ""
+        process = extract_prop(props, "프로세스", "status") or ""
+
+        # 입항보고 단계 = 본선 이미 입항. ETA는 유니패스가 더 정확하므로 ETD만 갱신
+        is_arrived = (process == "입항보고")
 
         if not vessel_str or not pol or not pod:
             stats["skipped"] += 1
@@ -144,12 +157,12 @@ def main():
             print(f"  [{i+1}/{len(pages)}] {chasu:20} NOMATCH: {vessel_str} ({pol}->{pod})")
             continue
 
-        # update
+        # update payload
         payload = {}
         if matched.get("etd"):
             etd_iso = matched["etd"] + "+09:00"
             payload["ETD"] = {"date": {"start": etd_iso}}
-        if matched.get("eta"):
+        if matched.get("eta") and not is_arrived:
             eta_iso = matched["eta"] + "+09:00"
             payload["ETA"] = {"date": {"start": eta_iso}}
             payload["캘린더 표기"] = {"date": {"start": eta_iso[:10]}}
@@ -157,15 +170,20 @@ def main():
         if payload:
             try:
                 update_page(notion_token, page["id"], payload)
-                stats["matched"] += 1
-                print(f"  [{i+1}/{len(pages)}] {chasu:20} MATCH: {matched['vesselName']} {matched['voyageNumber']} ETD={matched.get('etd')} ETA={matched.get('eta')}")
+                if is_arrived:
+                    stats["etd_only"] += 1
+                    tag = "[ETD-ONLY]"
+                else:
+                    stats["matched"] += 1
+                    tag = "MATCH:"
+                print(f"  [{i+1}/{len(pages)}] {chasu:20} {tag} {matched['vesselName']} {matched['voyageNumber']} ETD={matched.get('etd')} ETA={matched.get('eta')}")
             except Exception as e:
                 stats["errored"] += 1
                 print(f"  [{i+1}/{len(pages)}] {chasu:20} update 오류: {e}")
 
     elapsed = (datetime.now() - started).total_seconds()
     print(f"\n[{datetime.now().isoformat()}] 완료 ({elapsed:.1f}초)")
-    print(f"  매칭: {stats['matched']}건 / NOMATCH: {stats['nomatch']}건 / 스킵: {stats['skipped']}건 / 오류: {stats['errored']}건")
+    print(f"  매칭: {stats['matched']}건 / ETD-only: {stats['etd_only']}건 / NOMATCH: {stats['nomatch']}건 / 스킵: {stats['skipped']}건 / 오류: {stats['errored']}건")
 
 
 if __name__ == "__main__":
