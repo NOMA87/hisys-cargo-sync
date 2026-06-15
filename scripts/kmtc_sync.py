@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-KMTC ptpSchedule 전용 동기화 (v1.2)
+KMTC ptpSchedule 전용 동기화 (v1.3)
 
 - 입력완료 ✓ + 프로세스 ∈ [미반영, 입항보고] OR is_empty
 - FCL + LCL + 해상수출입 모두 처리
 - 차수의 선명&항차로 KMTC 본선 매칭 → ETD/ETA + 캘린더 표기 PATCH
 - 매시간 cron 실행 (별도 workflow)
 
-v1.2 변경점:
+v1.3 변경점:
 - 필터에 "입항보고" 단계 추가 (본선 출항 직후 케이스 보강)
 - 입항보고 단계 차수는 ETD만 갱신, ETA/캘린더는 스킵
   (유니패스 etprDt가 이미 정확한 실제 입항일을 보유, KMTC 예정값으로 덮으면 퇴행)
@@ -183,11 +183,11 @@ def main():
             elif eta[:10] == eta_kmtc_date and len(eta) <= 10:
                 payload["ETA"] = {"date": {"start": eta_iso}}
 
-        # 캘린더 표기: 수입=ETA, 수출=ETD
+        # 캘린더 표기: 수입=ETA datetime, 수출=ETD datetime (시:분까지)
         if is_export and matched.get("etd"):
-            payload["캘린더 표기"] = {"date": {"start": matched["etd"][:10]}}
+            payload["캘린더 표기"] = {"date": {"start": matched["etd"] + "+09:00"}}
         elif not is_export and matched.get("eta") and not is_arrived:
-            payload["캘린더 표기"] = {"date": {"start": matched["eta"][:10]}}
+            payload["캘린더 표기"] = {"date": {"start": matched["eta"] + "+09:00"}}
 
         if payload:
             try:
