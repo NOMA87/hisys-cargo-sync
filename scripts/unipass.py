@@ -563,6 +563,48 @@ def fetch_hjit_freeday(cntr_no, timeout=10):
 
 
 
+# === SNCT 무료장치일 통합 (v2.18) ===
+SNCT_FREEDAY_URL = "https://snct.sun-kwang.co.kr/sbs/index.jsp?pName=free"
+
+def fetch_snct_freeday(cntr_no, timeout=10):
+    """SNCT(선광신컨테이너터미널) 무료장치일 조회 -> ISO datetime (반출기한 = 일자 + 23:59) 또는 None.
+
+    SNCT_PROXY_URL 환경변수 있으면 Vercel proxy 경유, 없으면 직접 POST 호출.
+    응답 HTML 구조: <td>{cntr_no}</td>...<td>YYYY-MM-DD</td>
+    """
+    if not cntr_no:
+        return None
+    proxy_url = os.environ.get("SNCT_PROXY_URL", "").strip()
+    proxy_token = os.environ.get("PROXY_TOKEN", "").strip()
+    cntr = cntr_no.strip().upper()
+    if proxy_url:
+        params = {"contNo": cntr}
+        if proxy_token:
+            params["token"] = proxy_token
+        url = proxy_url + "?" + urllib.parse.urlencode(params)
+        req = urllib.request.Request(url, headers={"User-Agent": "hisys-cargo-sync/2.18"})
+    else:
+        data = urllib.parse.urlencode({"in_tag": "C", "in_str": cntr}).encode("utf-8")
+        req = urllib.request.Request(SNCT_FREEDAY_URL, data=data, headers={
+            "User-Agent": "hisys-cargo-sync/2.18",
+            "Content-Type": "application/x-www-form-urlencoded",
+        })
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+        print(f"  [SNCT-FN] cntr={cntr} html_len={len(html)} status={resp.status}", flush=True)
+    except Exception as _e:
+        print(f"  [SNCT-FN-ERR] {type(_e).__name__}: {_e}", flush=True)
+        return None
+    # 표 td 패턴: 컨테이너 번호 뒤에 YYYY-MM-DD 위치
+    m = re.search(re.escape(cntr) + r"[\s\S]{0,500}?(\d{4}-\d{2}-\d{2})", html)
+    if not m:
+        print(f"  [SNCT-FN-NOMATCH] cntr={cntr} html_len={len(html)}", flush=True)
+        return None
+    return m.group(1) + "T23:59:00+09:00"
+
+
+
 # === KMTC ptpSchedule 통합 (v2.9) ===
 # UN/LOCODE → KMTC 3자 코드 매핑 (태주 외 화주도 추후 확장)
 KMTC_PORT_MAP = {
