@@ -37,6 +37,40 @@ from unipass import (
     QUARANTINE_HWAJU, fetch_hjit_freeday, fetch_kmtc_schedule, match_kmtc_vessel
 )
 
+
+# === v2.17: 정합성 가드 ===
+def vessel_match_ok(notion_str, hdr_ship, hdr_vyd):
+    """노션 선명&항차 vs 유니패스 header 본선/항차 매칭.
+    None 반환 시 검증 불가 (어느 한 쪽이 비어 있음).
+    """
+    if not notion_str or not hdr_ship:
+        return None
+    parts = notion_str.strip().split()
+    if len(parts) < 2:
+        return None
+    notion_voy = parts[-1].upper()
+    notion_name = "".join(parts[:-1]).upper()
+    ship = (hdr_ship or "").replace(" ", "").upper()
+    vyd = (hdr_vyd or "").replace(" ", "").upper()
+    name_match = notion_name in ship or ship in notion_name
+    voy_match = (notion_voy == vyd) or (vyd and (vyd in notion_voy or notion_voy in vyd))
+    return name_match and voy_match
+
+
+def eta_drift_days(notion_eta, header_eta):
+    """노션 ETA vs 유니패스 etprDt 일자 차이 (abs days).
+    None 반환 시 검증 불가.
+    """
+    if not notion_eta or not header_eta:
+        return None
+    try:
+        n = datetime.strptime(notion_eta[:10], "%Y-%m-%d").date()
+        h = datetime.strptime(header_eta[:10], "%Y-%m-%d").date()
+        return abs((n - h).days)
+    except Exception:
+        return None
+
+
 NOTION_API = "https://api.notion.com/v1"
 NOTION_VERSION = "2025-09-03"
 
@@ -379,6 +413,43 @@ def main():
                 print(f"  [HJIT-ERROR] {case['차수']}: {type(_e).__name__}: {_e}")
         elif _is_hjit:
             print(f"  [HJIT-SKIP] {case['차수']}: hjit={_is_hjit} no_outbound={_no_outbound} has_cntr={_has_cntr}")
+
+        # v2.17: 정합성 가드 — 본선 불일치 + ETA drift 30일+ 검사
+        # 어긋나면 ETA/프로세스/통관 필드는 PATCH 보류, 컨테이너/HJIT는 통과
+        vessel_ok = vessel_match_ok(
+            case["current"].get("선명&항차"),
+            result.get("shipNm"),
+            result.get("vydf"),
+        )
+        drift = eta_drift_days(case["current"].get("ETA"), result.get("eta"))
+        guard_warn = []
+        if vessel_ok is False:
+            guard_warn.append(
+                f"본선 불일치: notion='{case['current'].get('선명&항차')}' vs 유니패스='{result.get('shipNm')} {result.get('vydf') or ''}'"
+            )
+        if drift is not None and drift >= 30:
+            guard_warn.append(
+                f"ETA drift {drift}일: notion={case['current'].get('ETA')} vs etprDt={result.get('eta')}"
+            )
+        if guard_warn:
+            # 마스킹: 통관/검역/ETA 필드 제거 (혹시 다른 화물 데이터일 수 있음)
+            for _k in ("process", "eta", "shipArrivalAt", "cargMtNo", "importDeclNo",
+                       "customsClearedAt", "quarantineDeclNo", "quarantineAt",
+                       "inboundAt", "outboundAt"):
+                result[_k] = None
+            # 비고에 경고 표시 (1회만 추가)
+            existing_remark = case["current"].get("비고") or ""
+            mark = f"[검증 실패 {today_iso}] " + " / ".join(guard_warn)
+            if "[검증 실패" not in existing_remark:
+                case["current"]["비고"] = (existing_remark + "\n" + mark).strip()
+                # 비고는 build_diff에서 덮지 않으므로 별도 PATCH 필요
+                try:
+                    update_page(notion_token, case["pageId"], {
+                        "비고": {"rich_text": [{"text": {"content": case["current"]["비고"]}}]}
+                    })
+                    print(f"  [GUARD] {case['차수']}: {' | '.join(guard_warn)}")
+                except Exception as _e:
+                    print(f"  [GUARD-ERR] {case['차수']}: {_e}")
 
         # 변경된 필드만 update
         diff = build_diff(case["current"], result, today_iso, backfill=backfill)
