@@ -193,6 +193,7 @@ def parse_chasu_page(page, token):
             "CFS 창고": extract_prop(props, "CFS 창고", "rich_text"),
             "검사대상": extract_prop(props, "검사대상", "checkbox"),
             "비고": extract_prop(props, "비고", "rich_text"),
+            "컨테이너 번호": extract_prop(props, "컨테이너 번호", "rich_text"),
         }
     }
 
@@ -334,6 +335,28 @@ def main():
             if "응답 헤더 없음" in reason or "적핟목록" in reason:
                 stats["no_response"] += 1
             print(f"  [{i+1}/{len(pages)}] {case['차수']:20} 스킵: {reason[:60]}")
+
+            # v2.16: skip 케이스에서도 비고 컨테이너 추출 + HJIT 반출기한 자동 조회
+            try:
+                cntr_fallback = extract_container_nos_from_remark(case["current"].get("비고"))
+                pod_terminal_cur = case["current"].get("POD 터미널") or ""
+                fb_payload = {}
+                if cntr_fallback and cntr_fallback != (case["current"].get("컨테이너 번호") or ""):
+                    fb_payload["컨테이너 번호"] = {"rich_text": [{"text": {"content": cntr_fallback}}]}
+                # HJIT 반출기한 (POD 터미널=HJIT + 컨테이너 있음 + 미반출)
+                if cntr_fallback and "HJIT" in pod_terminal_cur and not case["current"].get("반출시간"):
+                    first_cntr = cntr_fallback.split(",")[0].strip()
+                    try:
+                        _d = fetch_hjit_freeday(first_cntr)
+                        if _d:
+                            fb_payload["컨테이너 반출기한"] = {"date": {"start": _d}}
+                    except Exception as _e:
+                        print(f"  [HJIT-FALLBACK-ERR] {case['차수']}: {_e}")
+                if fb_payload:
+                    update_page(notion_token, case["pageId"], fb_payload)
+                    print(f"  [SKIP-FALLBACK] {case['차수']}: {list(fb_payload.keys())} 갱신")
+            except Exception as _e:
+                print(f"  [SKIP-FALLBACK-ERR] {case['차수']}: {_e}")
             continue
 
         # 컨테이너 번호 fallback: 유니패스에 없으면 비고에서 파싱
