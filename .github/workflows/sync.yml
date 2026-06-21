@@ -45,6 +45,7 @@ jobs:
           PROXY_TOKEN: ${{ secrets.PROXY_TOKEN }}
           HJIT_PROXY_URL: ${{ secrets.HJIT_PROXY_URL }}
           KMTC_PROXY_URL: ${{ secrets.KMTC_PROXY_URL }}
+          SNCT_PROXY_URL: ${{ secrets.SNCT_PROXY_URL }}
           PYTHONIOENCODING: utf-8
           BACKFILL: ${{ inputs.backfill }}
         run: |
