@@ -34,7 +34,7 @@ sys.path.insert(0, SCRIPT_DIR)
 
 from unipass import (
     get_api_key, fetch_with_fallback, build_result, is_invalid_bl, norm,
-    QUARANTINE_HWAJU, fetch_hjit_freeday, fetch_kmtc_schedule, match_kmtc_vessel
+    QUARANTINE_HWAJU, fetch_hjit_freeday, fetch_snct_freeday, fetch_kmtc_schedule, match_kmtc_vessel
 )
 
 
@@ -386,6 +386,15 @@ def main():
                             fb_payload["컨테이너 반출기한"] = {"date": {"start": _d}}
                     except Exception as _e:
                         print(f"  [HJIT-FALLBACK-ERR] {case['차수']}: {_e}")
+                # v2.18: SNCT 반출기한 (POD 터미널=SNCT)
+                if cntr_fallback and "SNCT" in pod_terminal_cur and not case["current"].get("반출시간"):
+                    first_cntr = cntr_fallback.split(",")[0].strip()
+                    try:
+                        _d = fetch_snct_freeday(first_cntr)
+                        if _d:
+                            fb_payload["컨테이너 반출기한"] = {"date": {"start": _d}}
+                    except Exception as _e:
+                        print(f"  [SNCT-FALLBACK-ERR] {case['차수']}: {_e}")
                 if fb_payload:
                     update_page(notion_token, case["pageId"], fb_payload)
                     print(f"  [SKIP-FALLBACK] {case['차수']}: {list(fb_payload.keys())} 갱신")
@@ -413,6 +422,19 @@ def main():
                 print(f"  [HJIT-ERROR] {case['차수']}: {type(_e).__name__}: {_e}")
         elif _is_hjit:
             print(f"  [HJIT-SKIP] {case['차수']}: hjit={_is_hjit} no_outbound={_no_outbound} has_cntr={_has_cntr}")
+
+        # v2.18: SNCT 무료장치일 자동 조회 (POD 터미널 = SNCT + 미반출 + 컨테이너 있음)
+        _is_snct = "SNCT" in pod_terminal
+        if _is_snct and _no_outbound and _has_cntr:
+            first_cntr = result["containerNos"].split(",")[0].strip()
+            print(f"  [SNCT-DEBUG] {case['차수']}: try fetch cntr={first_cntr} proxy={'set' if os.environ.get('SNCT_PROXY_URL') else 'EMPTY'}")
+            try:
+                _d = fetch_snct_freeday(first_cntr)
+                if _d:
+                    result["hjitDeadline"] = _d  # 같은 노션 필드(컨테이너 반출기한)에 저장
+                print(f"  [SNCT-DEBUG] {case['차수']}: result={_d}")
+            except Exception as _e:
+                print(f"  [SNCT-ERROR] {case['차수']}: {type(_e).__name__}: {_e}")
 
         # v2.17: 정합성 가드 — 본선 불일치 + ETA drift 30일+ 검사
         # 어긋나면 ETA/프로세스/통관 필드는 PATCH 보류, 컨테이너/HJIT는 통과
