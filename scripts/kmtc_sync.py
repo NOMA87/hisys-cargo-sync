@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-KMTC ptpSchedule 전용 동기화 (v1.3)
+KMTC ptpSchedule 전용 동기화 (v1.4)
 
 - 입력완료 ✓ + 프로세스 ∈ [미반영, 입항보고] OR is_empty
 - FCL + LCL + 해상수출입 모두 처리
 - 차수의 선명&항차로 KMTC 본선 매칭 → ETD/ETA + 캘린더 표기 PATCH
 - 매시간 cron 실행 (별도 workflow)
 
-v1.3 변경점:
+v1.4 변경점:
 - 필터에 "입항보고" 단계 추가 (본선 출항 직후 케이스 보강)
 - 입항보고 단계 차수는 ETD만 갱신, ETA/캘린더는 스킵
   (유니패스 etprDt가 이미 정확한 실제 입항일을 보유, KMTC 예정값으로 덮으면 퇴행)
@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
-from unipass import KMTC_PORT_MAP, fetch_kmtc_schedule, match_kmtc_vessel
+from unipass import KMTC_PORT_MAP, fetch_kmtc_schedule, match_kmtc_vessel, get_port_tz
 
 NOTION_API = "https://api.notion.com/v1"
 NOTION_VERSION = "2025-09-03"
@@ -165,9 +165,13 @@ def main():
         is_export = (io_type == "해상수출")
         payload = {}
 
+        # v1.4: ETD=POL timezone / ETA=POD timezone (KMTC API는 각 항구 LT 응답)
+        pol_tz = get_port_tz(pol)
+        pod_tz = get_port_tz(pod)
+
         # ETD 처리
         if matched.get("etd"):
-            etd_iso = matched["etd"] + "+09:00"
+            etd_iso = matched["etd"] + pol_tz
             etd_kmtc_date = matched["etd"][:10]
             if not etd:
                 payload["ETD"] = {"date": {"start": etd_iso}}
@@ -176,18 +180,18 @@ def main():
 
         # ETA 처리 (입항보고 이후엔 스킵)
         if matched.get("eta") and not is_arrived:
-            eta_iso = matched["eta"] + "+09:00"
+            eta_iso = matched["eta"] + pod_tz
             eta_kmtc_date = matched["eta"][:10]
             if not eta:
                 payload["ETA"] = {"date": {"start": eta_iso}}
             elif eta[:10] == eta_kmtc_date and len(eta) <= 10:
                 payload["ETA"] = {"date": {"start": eta_iso}}
 
-        # 캘린더 표기: 수입=ETA datetime, 수출=ETD datetime (시:분까지)
+        # 캘린더 표기: 수입=ETA datetime (POD tz), 수출=ETD datetime (POL tz)
         if is_export and matched.get("etd"):
-            payload["캘린더 표기"] = {"date": {"start": matched["etd"] + "+09:00"}}
+            payload["캘린더 표기"] = {"date": {"start": matched["etd"] + pol_tz}}
         elif not is_export and matched.get("eta") and not is_arrived:
-            payload["캘린더 표기"] = {"date": {"start": matched["eta"] + "+09:00"}}
+            payload["캘린더 표기"] = {"date": {"start": matched["eta"] + pod_tz}}
 
         if payload:
             try:
