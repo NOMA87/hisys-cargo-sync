@@ -136,6 +136,13 @@ def norm(s):
     return re.sub(r"\s+", "", s or "")
 
 
+def is_inbound_decl(t):
+    """v2.19: 반입신고 변종 부분 매칭 (반출신고는 제외).
+    매칭 예: 반입신고, 물품반입신고, 반입신고수리, 보세운송반입신고 등
+    """
+    return "반입" in t and "신고" in t and "반출" not in t
+
+
 def match_terminal(shed_nm):
     """
     shedNm 텍스트 → (podTerminal, cfsWarehouse) 반환.
@@ -310,7 +317,7 @@ def map_process(history, hwaju):
     has_pass = False
 
     inbound_count = sum(
-        1 for h in history if norm(h.get("cargTrcnRelaBsopTpcd", "")) == "반입신고"
+        1 for h in history if is_inbound_decl(norm(h.get("cargTrcnRelaBsopTpcd", "")))
     )
 
     for item in history:
@@ -321,7 +328,7 @@ def map_process(history, hwaju):
             candidates.append(STAGE_MAP[t])
             continue
 
-        if t == "반입신고":
+        if is_inbound_decl(t):
             has_inbound = True
             if "입항반입" in c and inbound_count >= 2:
                 candidates.append({"name": "터미널반입", "priority": 3})
@@ -394,17 +401,17 @@ def build_result(parsed, hwaju, io_type):
     # - 항공: shedNm이 항공 보세창고 운영사 → POD 매칭 + CFS에 원문 동시 기록
     # - FCL: 헤더 shedNm = CY (기존 동작)
     inbound_count = sum(
-        1 for h in history if norm(h.get("cargTrcnRelaBsopTpcd", "")) == "반입신고"
+        1 for h in history if is_inbound_decl(norm(h.get("cargTrcnRelaBsopTpcd", "")))
     )
     cy_row = next(
         (h for h in history
-         if norm(h.get("cargTrcnRelaBsopTpcd", "")) == "반입신고"
+         if is_inbound_decl(norm(h.get("cargTrcnRelaBsopTpcd", "")))
          and "입항반입" in norm(h.get("rlbrCn", ""))),
         None
     )
     cfs_row = next(
         (h for h in history
-         if norm(h.get("cargTrcnRelaBsopTpcd", "")) == "반입신고"
+         if is_inbound_decl(norm(h.get("cargTrcnRelaBsopTpcd", "")))
          and "입항반입" not in norm(h.get("rlbrCn", ""))),
         None
     )
@@ -454,7 +461,7 @@ def build_result(parsed, hwaju, io_type):
     # - LCL: 입항반입 + 보세운송반입 2건 → 최종(보세운송반입) 시점
     inbound_rows = [
         h for h in history
-        if norm(h.get("cargTrcnRelaBsopTpcd", "")) == "반입신고"
+        if is_inbound_decl(norm(h.get("cargTrcnRelaBsopTpcd", "")))
     ]
     last_inbound = max(inbound_rows, key=lambda h: h.get("prcsDttm", "") or "", default=None)
     inbound_at = prcs_dttm_to_iso(last_inbound.get("prcsDttm", "") if last_inbound else "")
