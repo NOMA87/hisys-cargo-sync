@@ -653,6 +653,40 @@ KMTC_PORT_MAP = {
 }
 
 
+# === v1.4: UN/LOCODE 국가별 timezone offset ===
+# KMTC API 응답 vesselDepartureDate/vesselArrivalDate는 각 항구의 현지 시각(LT)
+# 도착항 timezone으로 ISO 부착 필요 (수출건 ETA 정확도)
+PORT_TZ_MAP = {
+    "CN": "+08:00",  # 중국
+    "KR": "+09:00",  # 한국
+    "JP": "+09:00",  # 일본
+    "MY": "+08:00",  # 말레이시아
+    "VN": "+07:00",  # 베트남
+    "TH": "+07:00",  # 태국
+    "HK": "+08:00",  # 홍콩
+    "SG": "+08:00",  # 싱가포르
+    "ID": "+07:00",  # 인도네시아
+    "PH": "+08:00",  # 필리핀
+    "TW": "+08:00",  # 대만
+    "PK": "+05:00",  # 파키스탄
+    "IN": "+05:30",  # 인도
+    "BD": "+06:00",  # 방글라데시
+    "LK": "+05:30",  # 스리랑카
+    "RU": "+10:00",  # 러시아 극동 (블라디보스토크 등) — 기본값
+    "CA": "-08:00",  # 캐나다 (밴쿠버 등) — PST
+    "US": "-08:00",  # 미국 서부 기본
+    "AU": "+10:00",  # 호주 동부 기본
+    "NZ": "+12:00",  # 뉴질랜드
+}
+
+
+def get_port_tz(loc_code, default="+09:00"):
+    """UN/LOCODE 앞 2자리(국가 코드)로 timezone offset 조회. 미매핑 시 default(KST)."""
+    if not loc_code:
+        return default
+    return PORT_TZ_MAP.get(loc_code[:2].upper(), default)
+
+
 def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4):
     """KMTC ptpSchedule 호출 -> vessel 리스트.
     
