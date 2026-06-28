@@ -234,11 +234,19 @@ def parse_chasu_page(page, token):
 
 
 def extract_container_nos_from_remark(remark):
-    """비고 텍스트에서 컨테이너 번호 추출 (CNTR: XXX 또는 4alpha+7digit 패턴)."""
+    """비고 텍스트에서 컨테이너 번호 추출 (CNTR: XXX 또는 4alpha+7digit 패턴).
+
+    v2.20: Seal/씨일 라벨 다음의 ISO 6346 패턴은 컨테이너 번호 아니므로 제외.
+    """
     if not remark:
         return None
-    # 4 alpha + 7 digit 패턴 (ISO 6346 컨테이너 번호) 전체 매칭
-    nums = re.findall(r"\b[A-Z]{4}\d{7}\b", remark.upper())
+    # Seal/씨일/SEAL 라벨 + 콜론 + (선택적 공백) + ISO 6346 패턴 → 제거
+    cleaned = re.sub(
+        r"(?i)(?:Seal|씨일|SEAL)\s*[:：]\s*[A-Z]{4}\d{7}",
+        "",
+        remark,
+    )
+    nums = re.findall(r"\b[A-Z]{4}\d{7}\b", cleaned.upper())
     return ", ".join(sorted(set(nums))) if nums else None
 
 
