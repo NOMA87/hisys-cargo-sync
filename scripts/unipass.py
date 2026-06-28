@@ -348,7 +348,11 @@ def map_process(history, hwaju):
 
     # 검역 분기 (식품화주 마커 기반) — v2.0 (#5)
     # QUARANTINE_HWAJU 셋에 포함되거나 hwaju가 "식품" 키워드 포함 시
-    is_food_hwaju = hwaju in QUARANTINE_HWAJU or "식품" in (hwaju or "")
+    # v2.21: 부분 매칭으로 변경 — "하이시스 로지텍(태주/샤먼/...)" 등 후위 표기 화주 인식
+    is_food_hwaju = (
+        any(q in (hwaju or "") for q in QUARANTINE_HWAJU)
+        or "식품" in (hwaju or "")
+    )
     if is_food_hwaju:
         if has_pass:
             candidates.append({"name": "검역완료", "priority": 6})
