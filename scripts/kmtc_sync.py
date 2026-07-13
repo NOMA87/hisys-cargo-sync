@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-KMTC ptpSchedule 전용 동기화 (v1.6)
+KMTC ptpSchedule 전용 동기화 (v1.7)
 
 - 입력완료 ✓ + 프로세스 ∈ [미반영, 입항보고] OR is_empty
 - FCL + LCL + 해상수출입 모두 처리
@@ -195,11 +195,11 @@ def main():
             elif eta[:10] == eta_kmtc_date and len(eta) <= 10:
                 payload["ETA"] = {"date": {"start": eta_iso}}
 
-        # 캘린더 표기: 수입=ETA datetime (POD tz), 수출=ETD datetime (POL tz)
-        if is_export and matched.get("etd"):
-            payload["캘린더 표기"] = {"date": {"start": matched["etd"] + pol_tz}}
-        elif not is_export and matched.get("eta") and not is_arrived:
-            payload["캘린더 표기"] = {"date": {"start": matched["eta"] + pod_tz}}
+       # 캘린더 표기: ETD(수출)/ETA(수입) payload와 항상 동기화
+            if is_export and "ETD" in payload:
+                payload["캘린더 표기"] = payload["ETD"]
+            elif not is_export and "ETA" in payload:
+                payload["캘린더 표기"] = payload["ETA"]
 
         if payload:
             try:
