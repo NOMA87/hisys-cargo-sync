@@ -174,18 +174,17 @@ def main():
         # v1.6: 수출은 ETD/ETA 무조건 KMTC 값으로 갱신 (본선/일자 변경 자동 반영)
         # 수입은 기존 가드 유지 (실제 입항 후 유니패스 우선)
         # ETD 처리 — 무조건 KMTC 값 갱신
-            if matched.get("etd"):
-                payload["ETD"] = {"date": {"start": matched["etd"] + pol_tz}}
-
-            # ETA 처리 — 무조건 KMTC 값 갱신
-            if matched.get("eta"):
-                payload["ETA"] = {"date": {"start": matched["eta"] + pod_tz}}
+        if matched.get("etd"):
+            payload["ETD"] = {"date": {"start": matched["etd"] + pol_tz}}
+        # ETA 처리 — 무조건 KMTC 값 갱신
+        if matched.get("eta"):
+            payload["ETA"] = {"date": {"start": matched["eta"] + pod_tz}}
 
        # 캘린더 표기: ETD(수출)/ETA(수입) payload와 항상 동기화
-            if is_export and "ETD" in payload:
-                payload["캘린더 표기"] = payload["ETD"]
-            elif not is_export and "ETA" in payload:
-                payload["캘린더 표기"] = payload["ETA"]
+        if is_export and "ETD" in payload:
+            payload["캘린더 표기"] = payload["ETD"]
+        elif not is_export and "ETA" in payload:
+            payload["캘린더 표기"] = payload["ETA"]
 
         if payload:
             try:
