@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-KMTC ptpSchedule 전용 동기화 (v1.7)
+KMTC ptpSchedule 전용 동기화 (v1.8)
 
 - 입력완료 ✓ + 프로세스 ∈ [미반영, 입항보고] OR is_empty
 - FCL + LCL + 해상수출입 모두 처리
@@ -173,27 +173,13 @@ def main():
         # 수입 차수는 기존 가드 유지 (사용자 수동 입력 보호)
         # v1.6: 수출은 ETD/ETA 무조건 KMTC 값으로 갱신 (본선/일자 변경 자동 반영)
         # 수입은 기존 가드 유지 (실제 입항 후 유니패스 우선)
-        # ETD 처리
-        if matched.get("etd"):
-            etd_iso = matched["etd"] + pol_tz
-            etd_kmtc_date = matched["etd"][:10]
-            if not etd:
-                payload["ETD"] = {"date": {"start": etd_iso}}
-            elif is_export:
-                payload["ETD"] = {"date": {"start": etd_iso}}  # 수출 무조건 갱신
-            elif etd[:10] == etd_kmtc_date and len(etd) <= 10:
-                payload["ETD"] = {"date": {"start": etd_iso}}
+        # ETD 처리 — 무조건 KMTC 값 갱신
+            if matched.get("etd"):
+                payload["ETD"] = {"date": {"start": matched["etd"] + pol_tz}}
 
-        # ETA 처리 (입항보고 이후엔 스킵)
-        if matched.get("eta") and not is_arrived:
-            eta_iso = matched["eta"] + pod_tz
-            eta_kmtc_date = matched["eta"][:10]
-            if not eta:
-                payload["ETA"] = {"date": {"start": eta_iso}}
-            elif is_export:
-                payload["ETA"] = {"date": {"start": eta_iso}}  # 수출 무조건 갱신
-            elif eta[:10] == eta_kmtc_date and len(eta) <= 10:
-                payload["ETA"] = {"date": {"start": eta_iso}}
+            # ETA 처리 — 무조건 KMTC 값 갱신
+            if matched.get("eta"):
+                payload["ETA"] = {"date": {"start": matched["eta"] + pod_tz}}
 
        # 캘린더 표기: ETD(수출)/ETA(수입) payload와 항상 동기화
             if is_export and "ETD" in payload:
