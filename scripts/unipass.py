@@ -758,6 +758,7 @@ def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4):
                     "loadPort": v.get("loadPortCode"),
                     "dischargePort": v.get("dischargePortCode"),
                     "podTerminal": _pod_trml,
+                    "cls": _cls,
                 })
     cache[ck] = vessels
     print(f"  [KMTC-OK] {kmtc_from}->{kmtc_to} {period_date} vessels={len(vessels)}", flush=True)
