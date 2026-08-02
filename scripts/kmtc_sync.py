@@ -133,6 +133,17 @@ def main():
             print(f"  [{i+1}/{len(pages)}] {chasu:20} 스킵: 선명/POL/POD 누락")
             continue
 
+        # v2.0: 수출 차수는 ETD 경과 시 출항완료로 전환 (유니패스 대상 아님)
+        if io_type == "해상수출" and etd and len(etd) >= 10:
+            try:
+                if datetime.strptime(etd[:10], "%Y-%m-%d") < datetime.now():
+                    update_page(notion_token, page["id"], {"프로세스": {"status": {"name": "출항완료"}}})
+                    stats["skipped"] += 1
+                    print(f"  [{i+1}/{len(pages)}] {chasu:20} 출항완료 전환 (ETD {etd[:10]})")
+                    continue
+            except Exception as e:
+                print(f"  [{i+1}/{len(pages)}] {chasu:20} 출항완료 전환 실패: {e}")
+
         # v1.9: ETA/ETD가 30일 이상 지난 차수는 스킵 (KMTC 스케줄은 4주 한정)
         _ref = eta or etd
         if _ref and len(_ref) >= 10:
