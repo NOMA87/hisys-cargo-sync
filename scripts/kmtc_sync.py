@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
-from unipass import KMTC_PORT_MAP, fetch_kmtc_schedule, match_kmtc_vessel, get_port_tz
+from unipass import KMTC_PORT_MAP, fetch_kmtc_schedule, match_kmtc_vessel, get_port_tz, match_terminal
 
 NOTION_API = "https://api.notion.com/v1"
 NOTION_VERSION = "2025-09-03"
@@ -207,6 +207,12 @@ def main():
             payload["캘린더 표기"] = payload["ETD"]
         elif not is_export and "ETA" in payload:
             payload["캘린더 표기"] = payload["ETA"]
+          
+       # v2.1: POD 터미널 사전 확보 (비어있을 때만 — 유니패스 실제값 우선)
+        if matched.get("podTerminal") and not extract_prop(props, "POD 터미널", "select"):
+            _pt, _ = match_terminal(matched["podTerminal"])
+            if _pt:
+                payload["POD 터미널"] = {"select": {"name": _pt}}
 
         if payload:
             try:
