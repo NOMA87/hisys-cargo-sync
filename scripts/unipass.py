@@ -728,7 +728,8 @@ def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4):
         req = urllib.request.Request(url, headers={"User-Agent": "hisys-cargo-sync/2.9"})
         with urllib.request.urlopen(req, timeout=20) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-    except Exception:
+    except Exception as e:
+        print(f"  [KMTC-ERR] {kmtc_from}->{kmtc_to} {period_date}: {type(e).__name__}: {e}", flush=True)
         return []
     vessels = []
     for sched in data if isinstance(data, list) else []:
