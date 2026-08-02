@@ -747,6 +747,7 @@ def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4):
     vessels = []
     for sched in data if isinstance(data, list) else []:
         _pod_trml = (sched.get("dischargeTerminalCode") or "").strip()
+        _cls = (sched.get("cargoCutOffTime") or "").strip()
         for v in sched.get("vessel", []):
             if v.get("vesselName"):
                 vessels.append({
