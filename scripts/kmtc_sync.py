@@ -214,6 +214,11 @@ def main():
             if _pt:
                 payload["POD 터미널"] = {"select": {"name": _pt}}
 
+       # v2.2: 수출 서류마감(CLS) 기록 — 6666 더미값 제외
+        _cls = matched.get("cls") or ""
+        if is_export and _cls and not _cls.startswith("6666"):
+            payload["CLS"] = {"date": {"start": _cls + pol_tz}}
+
         if payload:
             try:
                 update_page(notion_token, page["id"], payload)
