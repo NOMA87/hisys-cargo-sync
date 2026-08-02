@@ -624,12 +624,15 @@ KMTC_PORT_MAP = {
     "CNSHA": "SHA",  # SHANGHAI
     "CNNGB": "NBO",  # NINGBO
     "CNXMN": "XMN",  # XIAMEN
+    "CNXAM": "XMN",  # XIAMEN (노션 표기)
     "CNNSA": "NSA",  # NANSHA (광저우)
     "CNDAL": "DLN",  # DALIAN
     "CNQIN": "QIN",  # QINGDAO
     "CNTSN": "TXG",  # TIANJIN (XINGANG)
+    "CNXNG": "TXG",  # XINGANG (신강)
     "CNYTN": "YTN",  # YANTIAN (선전)
     "CNSZX": "SHK",  # SHEKOU (선전)
+    "CNSHK": "SHK",  # SHEKOU (노션 표기)
     # 한국
     "KRINC": "INC",  # INCHEON
     "KRPUS": "PUS",  # BUSAN
@@ -646,7 +649,7 @@ KMTC_PORT_MAP = {
     # 동남아
     "MYPKG": "PKG",  # PORT KLANG
     "MYPEN": "PEN",  # PENANG
-    "VNHCM": "HCM",  # HO CHI MINH (CATLAI)
+    "VNSGN": "HCM",  # HO CHI MINH (SAIGON 표기)
     "VNHPH": "HPH",  # HAIPHONG
     "THLCH": "LCB",  # LAEM CHABANG
     "THBKK": "BKK",  # BANGKOK
