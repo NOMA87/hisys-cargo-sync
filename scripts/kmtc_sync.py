@@ -133,6 +133,17 @@ def main():
             print(f"  [{i+1}/{len(pages)}] {chasu:20} 스킵: 선명/POL/POD 누락")
             continue
 
+        # v1.9: ETA/ETD가 30일 이상 지난 차수는 스킵 (KMTC 스케줄은 4주 한정)
+        _ref = eta or etd
+        if _ref and len(_ref) >= 10:
+            try:
+                if (datetime.now() - datetime.strptime(_ref[:10], "%Y-%m-%d")).days > 30:
+                    stats["skipped"] += 1
+                    print(f"  [{i+1}/{len(pages)}] {chasu:20} 스킵: 과거 차수 ({_ref[:10]})")
+                    continue
+            except Exception:
+                pass
+
         # periodDate: ETD 또는 ETA 기준 -3일
         ref = etd or eta
         if ref and len(ref) >= 10:
