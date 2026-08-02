@@ -703,12 +703,10 @@ def get_port_tz(loc_code, default="+09:00"):
 
 def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4):
     """KMTC ptpSchedule 호출 -> vessel 리스트.
-    
-    pol_un, pod_un: UN/LOCODE (예: CNTAC, KRINC)
-    period_date: YYYYMMDD
-    week_term: 1-4
-    Returns: [{vesselName, voyageNumber, vesselDepartureDate, vesselArrivalDate, loadPortCode, dischargePortCode}, ...]
+
+    v2.24: 동일 조합 캐싱 + 호출 딜레이 + 429 재시도 (KMTC rate limit 대응)
     """
+    import time
     proxy_url = os.environ.get("KMTC_PROXY_URL", "").strip()
     if not proxy_url:
         return []
@@ -716,6 +714,13 @@ def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4):
     kmtc_to = KMTC_PORT_MAP.get((pod_un or "").upper())
     if not kmtc_from or not kmtc_to:
         return []
+    cache = getattr(fetch_kmtc_schedule, "_cache", None)
+    if cache is None:
+        cache = {}
+        fetch_kmtc_schedule._cache = cache
+    ck = (kmtc_from, kmtc_to, period_date, week_term)
+    if ck in cache:
+        return cache[ck]
     params = urllib.parse.urlencode({
         "fromLocationCode": kmtc_from,
         "toLocationCode": kmtc_to,
@@ -724,13 +729,21 @@ def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4):
         "webPriority": "A"
     })
     url = proxy_url + "?" + params
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "hisys-cargo-sync/2.9"})
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        print(f"  [KMTC-ERR] {kmtc_from}->{kmtc_to} {period_date}: {type(e).__name__}: {e}", flush=True)
-        return []
+    data = None
+    for attempt in range(3):
+        try:
+            time.sleep(0.6)
+            req = urllib.request.Request(url, headers={"User-Agent": "hisys-cargo-sync/2.24"})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            break
+        except Exception as e:
+            if "429" in str(e) and attempt < 2:
+                time.sleep(5 * (attempt + 1))
+                continue
+            print(f"  [KMTC-ERR] {kmtc_from}->{kmtc_to} {period_date}: {type(e).__name__}: {e}", flush=True)
+            cache[ck] = []
+            return []
     vessels = []
     for sched in data if isinstance(data, list) else []:
         for v in sched.get("vessel", []):
@@ -743,6 +756,8 @@ def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4):
                     "loadPort": v.get("loadPortCode"),
                     "dischargePort": v.get("dischargePortCode"),
                 })
+    cache[ck] = vessels
+    print(f"  [KMTC-OK] {kmtc_from}->{kmtc_to} {period_date} vessels={len(vessels)}", flush=True)
     return vessels
 
 def match_kmtc_vessel(vessels, vessel_name_str):
