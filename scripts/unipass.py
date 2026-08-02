@@ -744,7 +744,6 @@ def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4):
                 })
     return vessels
 
-
 def match_kmtc_vessel(vessels, vessel_name_str):
     """차수의 '선명&항차' 문자열로 KMTC vessel 리스트에서 매칭.
     
