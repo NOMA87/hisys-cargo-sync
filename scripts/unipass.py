@@ -704,15 +704,18 @@ def get_port_tz(loc_code, default="+09:00"):
 def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4):
     """KMTC ptpSchedule 호출 -> vessel 리스트.
 
-    v2.24: 동일 조합 캐싱 + 호출 딜레이 + 429 재시도 (KMTC rate limit 대응)
+    v2.28: 포트코드 fallback(UN/LOCODE 뒤 3자리) + 미매핑 로깅
     """
     import time
     proxy_url = os.environ.get("KMTC_PROXY_URL", "").strip()
     if not proxy_url:
         return []
-    kmtc_from = KMTC_PORT_MAP.get((pol_un or "").upper())
-    kmtc_to = KMTC_PORT_MAP.get((pod_un or "").upper())
+    _pol = (pol_un or "").upper()
+    _pod = (pod_un or "").upper()
+    kmtc_from = KMTC_PORT_MAP.get(_pol) or (_pol[2:] if len(_pol) == 5 else None)
+    kmtc_to = KMTC_PORT_MAP.get(_pod) or (_pod[2:] if len(_pod) == 5 else None)
     if not kmtc_from or not kmtc_to:
+        print(f"  [KMTC-NOPORT] {_pol}->{_pod}", flush=True)
         return []
     cache = getattr(fetch_kmtc_schedule, "_cache", None)
     if cache is None:
@@ -733,7 +736,7 @@ def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4):
     for attempt in range(3):
         try:
             time.sleep(0.6)
-            req = urllib.request.Request(url, headers={"User-Agent": "hisys-cargo-sync/2.24"})
+            req = urllib.request.Request(url, headers={"User-Agent": "hisys-cargo-sync/2.28"})
             with urllib.request.urlopen(req, timeout=20) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             break
