@@ -649,7 +649,7 @@ KMTC_PORT_MAP = {
     # 동남아
     "MYPKG": "PKG",  # PORT KLANG
     "MYPEN": "PEN",  # PENANG
-    "VNSGN": "HCM",  # HO CHI MINH (SAIGON 표기)
+    "VNSGN": "SGN",  # HO CHI MINH (SAIGON 표기)
     "VNHPH": "HPH",  # HAIPHONG
     "THLCH": "LCB",  # LAEM CHABANG
     "THBKK": "BKK",  # BANGKOK
