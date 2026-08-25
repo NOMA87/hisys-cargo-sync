@@ -136,7 +136,7 @@ def main():
         # v2.0: 수출 차수는 ETD 경과 시 출항완료로 전환 (유니패스 대상 아님)
         if io_type == "해상수출" and etd and len(etd) >= 10:
             try:
-                if datetime.strptime(etd[:10], "%Y-%m-%d") < datetime.now():
+                if datetime.strptime(etd[:10], "%Y-%m-%d").date() < datetime.now().date():
                     update_page(notion_token, page["id"], {"프로세스": {"status": {"name": "출항완료"}}})
                     stats["skipped"] += 1
                     print(f"  [{i+1}/{len(pages)}] {chasu:20} 출항완료 전환 (ETD {etd[:10]})")
