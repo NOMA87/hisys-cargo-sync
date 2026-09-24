@@ -446,12 +446,17 @@ def main():
 
         # v2.17: 정합성 가드 — 본선 불일치 + ETA drift 30일+ 검사
         # 어긋나면 ETA/프로세스/통관 필드는 PATCH 보류, 컨테이너/HJIT는 통과
-        vessel_ok = vessel_match_ok(
+        # v2.29: 노션 화물관리번호 == 유니패스 cargMtNo → 동일 화물 확정, 가드 면제
+        _cm_n = norm(case["cargmt"] or "").upper()
+        _cm_u = norm(result.get("cargMtNo") or "").upper()
+        _cargmt_confirmed = bool(_cm_n) and _cm_n == _cm_u
+
+        vessel_ok = None if _cargmt_confirmed else vessel_match_ok(
             case["current"].get("선명&항차"),
             result.get("shipNm"),
             result.get("vydf"),
         )
-        drift = eta_drift_days(case["current"].get("ETA"), result.get("eta"))
+        drift = None if _cargmt_confirmed else eta_drift_days(case["current"].get("ETA"), result.get("eta"))
         guard_warn = []
         if vessel_ok is False:
             guard_warn.append(
