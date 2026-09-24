@@ -467,6 +467,7 @@ def main():
                 f"ETA drift {drift}일: notion={case['current'].get('ETA')} vs etprDt={result.get('eta')}"
             )
         if guard_warn:
+            _cm_seen = result.get("cargMtNo")  # v2.30: 마스킹 전 보존 (비고 안내용)
             # 마스킹: 통관/검역/ETA 필드 제거 (혹시 다른 화물 데이터일 수 있음)
             for _k in ("process", "eta", "shipArrivalAt", "cargMtNo", "importDeclNo",
                        "customsClearedAt", "quarantineDeclNo", "quarantineAt",
@@ -475,6 +476,8 @@ def main():
             # 비고에 경고 표시 (1회만 추가)
             existing_remark = case["current"].get("비고") or ""
             mark = f"[검증 실패 {today_iso}] " + " / ".join(guard_warn)
+            if _cm_seen:
+                mark += f" / 확인 후 화물관리번호 입력 시 자동해제: {_cm_seen}"
             if "[검증 실패" not in existing_remark:
                 case["current"]["비고"] = (existing_remark + "\n" + mark).strip()
                 # 비고는 build_diff에서 덮지 않으므로 별도 PATCH 필요
