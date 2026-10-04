@@ -789,6 +789,113 @@ def match_kmtc_vessel(vessels, vessel_name_str):
     return None
 
 
+# === HMM portSchedule 통합 (v2.31) ===
+# By Calling Port Schedule: UN/LOCODE 그대로 사용, HMM + 공동운항 선박 포함
+HMM_PROXY_DEFAULT = "https://hisys-unipass-proxy.vercel.app/api/hmm-port"
+
+
+def fetch_hmm_port(port_un, date_from, date_to):
+    """HMM 항구별 기항 스케줄 -> resultData 리스트 (캐싱)."""
+    import time
+    proxy_url = (os.environ.get("HMM_PROXY_URL") or HMM_PROXY_DEFAULT).strip()
+    port = (port_un or "").upper()
+    if len(port) != 5:
+        return []
+    cache = getattr(fetch_hmm_port, "_cache", None)
+    if cache is None:
+        cache = {}
+        fetch_hmm_port._cache = cache
+    ck = (port, date_from, date_to)
+    if ck in cache:
+        return cache[ck]
+    url = proxy_url + "?" + urllib.parse.urlencode({
+        "portCode": port,
+        "durationFrom": date_from,
+        "durationTo": date_to,
+        "optionVessel": "2",
+    })
+    rows = []
+    try:
+        time.sleep(0.5)
+        req = urllib.request.Request(url, headers={"User-Agent": "hisys-cargo-sync/2.31"})
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        rows = data.get("resultData") or []
+        print(f"  [HMM-OK] {port} {date_from}-{date_to} calls={len(rows)}", flush=True)
+    except Exception as e:
+        print(f"  [HMM-ERR] {port} {date_from}-{date_to}: {type(e).__name__}: {e}", flush=True)
+    cache[ck] = rows
+    return rows
+
+
+def _hmm_iso(d, t):
+    """'20261019','1600' -> '2026-10-19T16:00:00' (현지시각, tz는 호출측에서 부착)."""
+    if not d or len(d) < 8:
+        return None
+    t = (t or "0000").ljust(4, "0")
+    return f"{d[0:4]}-{d[4:6]}-{d[6:8]}T{t[0:2]}:{t[2:4]}:00"
+
+
+def match_hmm_vessel(rows, vessel_name_str):
+    """선명&항차 문자열로 HMM 기항 리스트 매칭. 예: 'HMM GREEN 0005W' -> vvd HOGE0005W."""
+    if not rows or not vessel_name_str:
+        return None
+    parts = vessel_name_str.strip().split()
+    if len(parts) < 2:
+        return None
+    voy = parts[-1].upper()
+    name = "".join(parts[:-1]).upper()
+    for r in rows:
+        r_name = (r.get("vesselName") or "").replace(" ", "").upper()
+        if not r_name or not name:
+            continue
+        r_voy = ((r.get("scheduleVoyageNo") or "") + (r.get("scheduleDirectionCode") or "")).upper()
+        r_vvd = (r.get("vvdCode") or "").upper()
+        name_ok = name == r_name or name in r_name or r_name in name
+        voy_ok = voy == r_voy or (r_voy and r_voy in voy) or voy in r_vvd
+        if name_ok and voy_ok:
+            return r
+    return None
+
+
+def fetch_hmm_schedule(pol_un, pod_un, ref_date, vessel_name_str):
+    """POL 기항에서 ETD + vvdCode 확보 -> POD 기항에서 같은 vvdCode로 ETA.
+    반환 형식은 match_kmtc_vessel 결과와 호환 (etd/eta는 현지시각, tz 미부착).
+    """
+    from datetime import datetime as _dt, timedelta as _td
+    try:
+        base = _dt.strptime((ref_date or "")[:10], "%Y-%m-%d")
+    except Exception:
+        base = _dt.now()
+    pol_rows = fetch_hmm_port(pol_un, (base - _td(days=7)).strftime("%Y%m%d"),
+                              (base + _td(days=14)).strftime("%Y%m%d"))
+    hit = match_hmm_vessel(pol_rows, vessel_name_str)
+    if not hit:
+        return None
+    dep = hit.get("departure") or {}
+    etd = _hmm_iso(dep.get("departureDate"), dep.get("departureTime"))
+    vvd = hit.get("vvdCode") or ""
+    eta = None
+    if etd and vvd:
+        d0 = _dt.strptime(etd[:10], "%Y-%m-%d")
+        pod_rows = fetch_hmm_port(pod_un, d0.strftime("%Y%m%d"),
+                                  (d0 + _td(days=35)).strftime("%Y%m%d"))
+        for r in pod_rows:
+            if (r.get("vvdCode") or "") == vvd:
+                arr = r.get("arrival") or {}
+                eta = _hmm_iso(arr.get("arrivalDate"), arr.get("arrivalTime"))
+                break
+    return {
+        "vesselName": hit.get("vesselName") or "",
+        "voyageNumber": vvd,
+        "etd": etd,
+        "eta": eta,
+        "podTerminal": "",
+        "cls": "",
+        "source": "HMM",
+    }
+
+
 def decide_search_order(io, type_, hwaju=""):
     """
     검색키 우선순위 결정.
