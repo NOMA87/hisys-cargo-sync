@@ -35,6 +35,7 @@ jobs:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DS_ID: ${{ secrets.NOTION_DS_ID }}
           KMTC_PROXY_URL: ${{ secrets.KMTC_PROXY_URL }}
+          PROXY_TOKEN: ${{ secrets.PROXY_TOKEN }}
           PYTHONIOENCODING: utf-8
         run: |
           python scripts/kmtc_sync.py
