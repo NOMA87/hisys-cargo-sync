@@ -155,6 +155,12 @@ def main():
             except Exception:
                 pass
 
+        # v2.5: 선명 미정(TBA/TBN/TBD/TBC)은 API 조회 생략
+        if vessel_str.strip().upper().split()[0] in ("TBA", "TBN", "TBD", "TBC"):
+            stats["skipped"] += 1
+            print(f"  [{i+1}/{len(pages)}] {chasu:20} 스킵: 선명 미정 ({vessel_str})")
+            continue
+
         # periodDate: ETD 또는 ETA 기준 -3일
         ref = etd or eta
         if ref and len(ref) >= 10:
@@ -166,9 +172,17 @@ def main():
         else:
             period_date = datetime.now().strftime("%Y%m%d")
 
+        # v2.5: HMM 선박은 HMM 원본을 먼저 조회, 없으면 KMTC
+        _is_hmm = vessel_str.strip().upper().startswith("HMM ")
         try:
-            vessels = fetch_kmtc_schedule(pol, pod, period_date, 4)
-            matched = match_kmtc_vessel(vessels, vessel_str)
+            matched = None
+            if _is_hmm:
+                matched = fetch_hmm_schedule(pol, pod, ref or "", vessel_str)
+                if matched:
+                    print(f"  [{i+1}/{len(pages)}] {chasu:20} HMM-FIRST: {matched.get('voyageNumber')}")
+            if not matched:
+                vessels = fetch_kmtc_schedule(pol, pod, period_date, 4)
+                matched = match_kmtc_vessel(vessels, vessel_str)
         except Exception as e:
             stats["errored"] += 1
             print(f"  [{i+1}/{len(pages)}] {chasu:20} 오류: {e}")
