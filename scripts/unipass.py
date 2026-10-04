@@ -616,11 +616,35 @@ def fetch_snct_freeday(cntr_no, timeout=10):
 
 
 
+# === v2.32: 업무 프로그램 항구코드 → 표준 UN/LOCODE ===
+# 노션/업무 프로그램(G-서비스) 코드는 그대로 두고, 외부 API 호출 직전에만 변환.
+# 항목 추가 시 HMM/KMTC 실제 조회로 검증한 것만 넣을 것 (2026-10-04 검증).
+PORT_ALIAS = {
+    "KRKWA": "KRKAN",  # 광양
+    "CNXAM": "CNXMN",  # 샤먼
+    "CNNBG": "CNNGB",  # 닝보
+    "CNXGA": "CNTXG",  # 신강(천진)
+    "CNTAC": "CNTAG",  # 태창
+    "CNYAT": "CNYNT",  # 연태
+}
+
+
+def std_port(code):
+    c = (code or "").strip().upper()
+    return PORT_ALIAS.get(c, c)
+
+
+def _proxy_token_qs():
+    t = os.environ.get("PROXY_TOKEN", "").strip()
+    return ("&" + urllib.parse.urlencode({"token": t})) if t else ""
+
+
 # === KMTC ptpSchedule 통합 (v2.9) ===
 # UN/LOCODE → KMTC 3자 코드 매핑 (태주 외 화주도 추후 확장)
 KMTC_PORT_MAP = {
     # 중국
     "CNTAC": "TCG",  # TAICANG
+    "CNTAG": "TCG",  # TAICANG (표준)
     "CNSHA": "SHA",  # SHANGHAI
     "CNNGB": "NBO",  # NINGBO
     "CNXMN": "XMN",  # XIAMEN
@@ -638,6 +662,7 @@ KMTC_PORT_MAP = {
     "KRPUS": "PUS",  # BUSAN
     "KRPTK": "PTK",  # PYEONGTAEK
     "KRKWA": "KAN",  # GWANGYANG
+    "KRKAN": "KAN",  # GWANGYANG (표준)
     "KRUSN": "USN",  # ULSAN
     # 일본
     "JPTKY": "TYO",  # TOKYO
@@ -710,8 +735,8 @@ def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4):
     proxy_url = os.environ.get("KMTC_PROXY_URL", "").strip()
     if not proxy_url:
         return []
-    _pol = (pol_un or "").upper()
-    _pod = (pod_un or "").upper()
+    _pol = std_port(pol_un)
+    _pod = std_port(pod_un)
     kmtc_from = KMTC_PORT_MAP.get(_pol) or (_pol[2:] if len(_pol) == 5 else None)
     kmtc_to = KMTC_PORT_MAP.get(_pod) or (_pod[2:] if len(_pod) == 5 else None)
     if not kmtc_from or not kmtc_to:
@@ -731,7 +756,7 @@ def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4):
         "weekTerm": str(week_term),
         "webPriority": "A"
     })
-    url = proxy_url + "?" + params
+    url = proxy_url + "?" + params + _proxy_token_qs()
     data = None
     for attempt in range(3):
         try:
@@ -798,7 +823,7 @@ def fetch_hmm_port(port_un, date_from, date_to):
     """HMM 항구별 기항 스케줄 -> resultData 리스트 (캐싱)."""
     import time
     proxy_url = (os.environ.get("HMM_PROXY_URL") or HMM_PROXY_DEFAULT).strip()
-    port = (port_un or "").upper()
+    port = std_port(port_un)
     if len(port) != 5:
         return []
     cache = getattr(fetch_hmm_port, "_cache", None)
@@ -813,7 +838,7 @@ def fetch_hmm_port(port_un, date_from, date_to):
         "durationFrom": date_from,
         "durationTo": date_to,
         "optionVessel": "2",
-    })
+    }) + _proxy_token_qs()
     rows = []
     try:
         time.sleep(0.5)
@@ -823,7 +848,10 @@ def fetch_hmm_port(port_un, date_from, date_to):
         rows = data.get("resultData") or []
         print(f"  [HMM-OK] {port} {date_from}-{date_to} calls={len(rows)}", flush=True)
     except Exception as e:
-        print(f"  [HMM-ERR] {port} {date_from}-{date_to}: {type(e).__name__}: {e}", flush=True)
+        if "400" in str(e):
+            print(f"  [PORT-UNKNOWN] {port_un} -> {port} (HMM 미인식, PORT_ALIAS 추가 필요)", flush=True)
+        else:
+            print(f"  [HMM-ERR] {port} {date_from}-{date_to}: {type(e).__name__}: {e}", flush=True)
     cache[ck] = rows
     return rows
 
