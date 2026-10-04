@@ -41,12 +41,19 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
 from pathlib import Path
 
 ENDPOINT = "https://unipass.customs.go.kr:38010/ext/rest/cargCsclPrgsInfoQry/retrieveCargCsclPrgsInfo"
+USER_AGENT = "hisys-cargo-sync/2.33"
+
+# 유니패스 진행이력 필드명
+_STAGE_KEY = "cargTrcnRelaBsopTpcd"   # 처리단계명
+_REMARK_KEY = "rlbrCn"                # 처리내용 (입항반입/보세운송반입 등)
 
 # 매핑 화이트리스트 (정규화 키 → 노션 프로세스 + priority)
 STAGE_MAP = {
@@ -143,6 +150,44 @@ def is_inbound_decl(t):
     return "반입" in t and "신고" in t and "반출" not in t
 
 
+def _stage(row):
+    """진행이력 행의 처리단계명 (공백 제거)."""
+    return norm(row.get(_STAGE_KEY, ""))
+
+
+def _remark(row):
+    """진행이력 행의 처리내용 (공백 제거)."""
+    return norm(row.get(_REMARK_KEY, ""))
+
+
+def _is_inbound_row(row):
+    return is_inbound_decl(_stage(row))
+
+
+def _first_shed(header_shed, history):
+    """헤더 shedNm 우선, 비어 있으면 진행이력에서 처음 나오는 shedNm."""
+    if header_shed:
+        return header_shed
+    for h in history:
+        if h.get("shedNm"):
+            return h["shedNm"]
+    return ""
+
+
+def _proxy_url(base, params):
+    """프록시 URL 조립. PROXY_TOKEN이 있으면 token 파라미터를 뒤에 붙인다."""
+    token = os.environ.get("PROXY_TOKEN", "").strip()
+    if token:
+        params = dict(params, token=token)
+    return base + "?" + urllib.parse.urlencode(params)
+
+
+def _http_get_json(url, timeout):
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
 def match_terminal(shed_nm):
     """
     shedNm 텍스트 → (podTerminal, cfsWarehouse) 반환.
@@ -206,43 +251,35 @@ def call_unipass(api_key, bl_yy, hbl=None, mbl=None, cargmt=None, retries=RETRY_
         (예: https://hisys-unipass-proxy-1hng.vercel.app/api/proxy)
         proxy는 PROXY_TOKEN 환경변수 또는 ~/.config/unipass/proxy_token.txt 사용.
     """
-    import time
-    proxy_url = os.environ.get("UNIPASS_PROXY_URL", "").strip()
+    if cargmt:
+        search = {"cargMtNo": cargmt}
+    elif mbl:
+        search = {"mblNo": mbl}
+    elif hbl:
+        search = {"hblNo": hbl}
+    else:
+        raise ValueError("hbl, mbl, or cargmt required")
 
+    proxy_url = os.environ.get("UNIPASS_PROXY_URL", "").strip()
     if proxy_url:
         # Vercel proxy 사용 — crkyCn은 vercel 환경변수에서 자동 주입
         params = {"blYy": bl_yy}
-        token_path = Path.home() / ".config" / "unipass" / "proxy_token.txt"
         proxy_token = os.environ.get("PROXY_TOKEN", "").strip()
+        token_path = Path.home() / ".config" / "unipass" / "proxy_token.txt"
         if not proxy_token and token_path.exists():
             proxy_token = token_path.read_text().strip()
         if proxy_token:
             params["token"] = proxy_token
-        if cargmt:
-            params["cargMtNo"] = cargmt
-        elif mbl:
-            params["mblNo"] = mbl
-        elif hbl:
-            params["hblNo"] = hbl
-        else:
-            raise ValueError("hbl, mbl, or cargmt required")
+        params.update(search)
         url = proxy_url + "?" + urllib.parse.urlencode(params)
     else:
         # 직접 호출 (한국 IP 환경)
-        params = {"crkyCn": api_key, "blYy": bl_yy}
-        if cargmt:
-            params["cargMtNo"] = cargmt
-        elif mbl:
-            params["mblNo"] = mbl
-        elif hbl:
-            params["hblNo"] = hbl
-        else:
-            raise ValueError("hbl, mbl, or cargmt required")
+        params = {"crkyCn": api_key, "blYy": bl_yy, **search}
         url = ENDPOINT + "?" + urllib.parse.urlencode(params)
 
     req = urllib.request.Request(url, headers={
         "Accept": "*/*",
-        "User-Agent": "hisys-cargo-sync/2.1",
+        "User-Agent": USER_AGENT,
     })
     last_text = ""
     for attempt in range(retries):
@@ -316,13 +353,11 @@ def map_process(history, hwaju):
     has_inbound = False
     has_pass = False
 
-    inbound_count = sum(
-        1 for h in history if is_inbound_decl(norm(h.get("cargTrcnRelaBsopTpcd", "")))
-    )
+    inbound_count = sum(1 for h in history if _is_inbound_row(h))
 
     for item in history:
-        t = norm(item.get("cargTrcnRelaBsopTpcd", ""))
-        c = norm(item.get("rlbrCn", ""))
+        t = _stage(item)
+        c = _remark(item)
 
         if t in STAGE_MAP:
             candidates.append(STAGE_MAP[t])
@@ -396,86 +431,49 @@ def build_result(parsed, hwaju, io_type):
 
     process = map_process(history, hwaju) or "미반영"
 
-    import_decl = find_history(history, lambda h: norm(h.get("cargTrcnRelaBsopTpcd", "")) == "수입신고수리")
-    quar = find_history(history, lambda h: "검사/검역식품의약품(합격)" in norm(h.get("cargTrcnRelaBsopTpcd", "")))
+    import_decl = find_history(history, lambda h: _stage(h) == "수입신고수리")
+    quar = find_history(history, lambda h: "검사/검역식품의약품(합격)" in _stage(h))
 
     # 터미널 매핑 (LCL/항공 분리 로직)
     # - LCL: 진행이력에 "반입신고" 행이 2개 이상 → "입항반입" 단계 shedNm = CY (POD 후보),
     #        다른 반입신고 행 shedNm = CFS (LCL 보세창고)
     # - 항공: shedNm이 항공 보세창고 운영사 → POD 매칭 + CFS에 원문 동시 기록
     # - FCL: 헤더 shedNm = CY (기존 동작)
-    inbound_count = sum(
-        1 for h in history if is_inbound_decl(norm(h.get("cargTrcnRelaBsopTpcd", "")))
-    )
-    cy_row = next(
-        (h for h in history
-         if is_inbound_decl(norm(h.get("cargTrcnRelaBsopTpcd", "")))
-         and "입항반입" in norm(h.get("rlbrCn", ""))),
-        None
-    )
-    cfs_row = next(
-        (h for h in history
-         if is_inbound_decl(norm(h.get("cargTrcnRelaBsopTpcd", "")))
-         and "입항반입" not in norm(h.get("rlbrCn", ""))),
-        None
-    )
+    inbound_rows = [h for h in history if _is_inbound_row(h)]
+    inbound_count = len(inbound_rows)
+    cy_row = next((h for h in inbound_rows if "입항반입" in _remark(h)), None)
+    cfs_row = next((h for h in inbound_rows if "입항반입" not in _remark(h)), None)
 
     header_shed = header.get("shedNm") or ""
-    pod_terminal = None
-    cfs_warehouse = None
+    fallback_shed = _first_shed(header_shed, history)
 
-    # 통합 로직: 입항반입(CY) 행을 항상 우선 시도, 헤더는 fallback
+    # 입항반입(CY) 행을 항상 우선 시도, 헤더(또는 첫 이력) shedNm은 fallback
     pod_terminal = None
-    cfs_warehouse = None
     if cy_row and cy_row.get("shedNm"):
         pod_terminal, _ = match_terminal(cy_row.get("shedNm"))
     if not pod_terminal:
-        shed = header_shed
-        if not shed and history:
-            for h in history:
-                if h.get("shedNm"):
-                    shed = h.get("shedNm")
-                    break
-        pod_terminal, _ = match_terminal(shed)
+        pod_terminal, _ = match_terminal(fallback_shed)
 
+    cfs_warehouse = None
     if inbound_count >= 2 and cfs_row:
         # LCL: 보세운송반입 단계 shedNm을 CFS로
         cfs_warehouse = (cfs_row.get("shedNm") or "").strip() or None
-    elif io_type == "항공수입" and pod_terminal:
+    elif (io_type == "항공수입" and pod_terminal) or not pod_terminal:
         # 항공: 보세창고 운영사 원문도 CFS에 기록
-        shed = header_shed
-        if not shed and history:
-            for h in history:
-                if h.get("shedNm"):
-                    shed = h.get("shedNm"); break
-        cfs_warehouse = shed.strip() if shed else None
-    elif not pod_terminal:
-        # POD 매칭 실패 시 헤더 shedNm 원문을 CFS에 기록
-        shed = header_shed
-        if not shed and history:
-            for h in history:
-                if h.get("shedNm"):
-                    shed = h.get("shedNm"); break
-        cfs_warehouse = shed.strip() if shed else None
+        # POD 매칭 실패: 헤더 shedNm 원문을 CFS에 기록
+        cfs_warehouse = fallback_shed.strip() if fallback_shed else None
 
     shed_nm = header_shed or (cy_row.get("shedNm", "") if cy_row else "")
 
     # 최종 반입시간 (v2.3): 반입신고 중 가장 늦은 prcsDttm
     # - FCL/항공: 단일 반입신고 → 그 시점
     # - LCL: 입항반입 + 보세운송반입 2건 → 최종(보세운송반입) 시점
-    inbound_rows = [
-        h for h in history
-        if is_inbound_decl(norm(h.get("cargTrcnRelaBsopTpcd", "")))
-    ]
-    last_inbound = max(inbound_rows, key=lambda h: h.get("prcsDttm", "") or "", default=None)
-    inbound_at = prcs_dttm_to_iso(last_inbound.get("prcsDttm", "") if last_inbound else "")
+    inbound_at = _latest_prcs_dttm(inbound_rows)
 
     # 반출시간 (v2.4): 수입신고수리 후 물품반출 = 단일 이벤트
-    # - 모든 케이스: 보세운송반출(LCL 중간)은 제외, 실제 화주 반출만
+    # - 보세운송반출(LCL 중간)은 제외, 실제 화주 반출만
     outbound_row = next(
-        (h for h in history
-         if norm(h.get("cargTrcnRelaBsopTpcd", "")) == "반출신고"
-         and "보세운송반출" not in norm(h.get("rlbrCn", ""))),
+        (h for h in history if _stage(h) == "반출신고" and "보세운송반출" not in _remark(h)),
         None
     )
     outbound_at = prcs_dttm_to_iso(outbound_row.get("prcsDttm", "") if outbound_row else "")
@@ -483,37 +481,18 @@ def build_result(parsed, hwaju, io_type):
     # 실제 본선 입항 시각 (v2.14):
     # 1) "입항보고" row 중 가장 최근 prcsDttm
     # 2) 헤더 etprDt가 그보다 더 최신 일자면 etprDt 우선 (본선 변경 즉시 반영)
-    ship_arrival_rows = [
-        h for h in history
-        if norm(h.get("cargTrcnRelaBsopTpcd", "")) in ("입항보고", "입항보고수리", "입항적재화물목록심사완료")
-    ]
-    last_ship_arrival = max(ship_arrival_rows, key=lambda h: h.get("prcsDttm", "") or "", default=None)
-    ship_arrival_at = prcs_dttm_to_iso(last_ship_arrival.get("prcsDttm", "") if last_ship_arrival else "")
-    _header_etpr = yyyymmdd_to_iso(header.get("etprDt", ""))
-    if _header_etpr:
-        if not ship_arrival_at or _header_etpr[:10] > ship_arrival_at[:10]:
-            ship_arrival_at = _header_etpr + "T00:00:00+09:00"                             
-    # 컨테이너 번호 수집 (v2.7): history + header 다중 필드 + 패턴 매칭
-    _cntr_re = re.compile(r"^[A-Z]{4}\d{7}$")
-    _cntr_set = set()
-    for _h in history:
-        _v = (_h.get("cntrNo") or "").strip().upper()
-        if _v and _cntr_re.match(_v):
-            _cntr_set.add(_v)
-    for _hf in ("cntrNoLstCn", "cntrNoCn", "cntrNoList"):
-        _v = (header.get(_hf) or "").strip()
-        if _v:
-            for _c in re.split(r"[,\s]+", _v):
-                _c = _c.strip().upper()
-                if _c and _cntr_re.match(_c):
-                    _cntr_set.add(_c)
-    container_nos_str = ", ".join(sorted(_cntr_set)) if _cntr_set else None
+    ship_arrival_at = _latest_prcs_dttm(
+        [h for h in history if _stage(h) in ("입항보고", "입항보고수리", "입항적재화물목록심사완료")]
+    )
+    header_etpr = yyyymmdd_to_iso(header.get("etprDt", ""))
+    if header_etpr and (not ship_arrival_at or header_etpr[:10] > ship_arrival_at[:10]):
+        ship_arrival_at = header_etpr + "T00:00:00+09:00"
 
     return {
         "skip": False,
         "reason": "정상 매핑" if process != "미반영" else "매핑 가능 단계 없음",
         "process": process,
-        "eta": yyyymmdd_to_iso(header.get("etprDt", "")),
+        "eta": header_etpr,
         "cargMtNo": header.get("cargMtNo") or None,
         "importDeclNo": (import_decl.get("dclrNo") if import_decl else None) or None,
         "customsClearedAt": yyyymmdd_to_iso((import_decl.get("prcsDttm", "")[:8] if import_decl else "")),
@@ -527,9 +506,33 @@ def build_result(parsed, hwaju, io_type):
         "shedNm": shed_nm or None,
         "podTerminal": pod_terminal,
         "cfsWarehouse": cfs_warehouse,
-        "containerNos": container_nos_str,
+        "containerNos": _collect_container_nos(header, history),
         "shipArrivalAt": ship_arrival_at,
     }
+
+
+def _latest_prcs_dttm(rows):
+    """행 목록 중 가장 늦은 prcsDttm → ISO datetime (없으면 None)."""
+    last = max(rows, key=lambda h: h.get("prcsDttm", "") or "", default=None)
+    return prcs_dttm_to_iso(last.get("prcsDttm", "") if last else "")
+
+
+_CNTR_RE = re.compile(r"^[A-Z]{4}\d{7}$")
+
+
+def _collect_container_nos(header, history):
+    """컨테이너 번호 수집 (v2.7): history cntrNo + header 다중 필드, ISO 6346 패턴만."""
+    found = set()
+    for h in history:
+        v = (h.get("cntrNo") or "").strip().upper()
+        if v and _CNTR_RE.match(v):
+            found.add(v)
+    for field in ("cntrNoLstCn", "cntrNoCn", "cntrNoList"):
+        for c in re.split(r"[,\s]+", (header.get(field) or "").strip()):
+            c = c.strip().upper()
+            if c and _CNTR_RE.match(c):
+                found.add(c)
+    return ", ".join(sorted(found)) if found else None
 
 
 
@@ -544,19 +547,16 @@ def fetch_hjit_freeday(cntr_no, timeout=10):
     if not cntr_no:
         return None
     proxy_url = os.environ.get("HJIT_PROXY_URL", "").strip()
-    proxy_token = os.environ.get("PROXY_TOKEN", "").strip()
     if proxy_url:
-        params = {"contNo": cntr_no.strip()}
-        if proxy_token:
-            params["token"] = proxy_token
-        url = proxy_url + "?" + urllib.parse.urlencode(params)
+        url = _proxy_url(proxy_url, {"contNo": cntr_no.strip()})
     else:
         url = HJIT_FREEDAY_URL + "?cmd=FreeDay&contNo=" + urllib.parse.quote(cntr_no.strip())
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "hisys-cargo-sync/2.8"})
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             html = resp.read().decode("utf-8", errors="replace")
-        print(f"  [HJIT-FN] url_tail=...{url[-50:]} html_len={len(html)} status_in_resp={resp.status}", flush=True)
+        # URL은 로그에 남기지 않음 (프록시 토큰 포함)
+        print(f"  [HJIT-FN] cntr={cntr_no.strip()} html_len={len(html)} status={resp.status}", flush=True)
     except Exception as _e:
         print(f"  [HJIT-FN-ERR] {type(_e).__name__}: {_e}", flush=True)
         return None
@@ -586,18 +586,14 @@ def fetch_snct_freeday(cntr_no, timeout=10):
     if not cntr_no:
         return None
     proxy_url = os.environ.get("SNCT_PROXY_URL", "").strip()
-    proxy_token = os.environ.get("PROXY_TOKEN", "").strip()
     cntr = cntr_no.strip().upper()
     if proxy_url:
-        params = {"contNo": cntr}
-        if proxy_token:
-            params["token"] = proxy_token
-        url = proxy_url + "?" + urllib.parse.urlencode(params)
-        req = urllib.request.Request(url, headers={"User-Agent": "hisys-cargo-sync/2.18"})
+        req = urllib.request.Request(_proxy_url(proxy_url, {"contNo": cntr}),
+                                     headers={"User-Agent": USER_AGENT})
     else:
         data = urllib.parse.urlencode({"in_tag": "C", "in_str": cntr}).encode("utf-8")
         req = urllib.request.Request(SNCT_FREEDAY_URL, data=data, headers={
-            "User-Agent": "hisys-cargo-sync/2.18",
+            "User-Agent": USER_AGENT,
             "Content-Type": "application/x-www-form-urlencoded",
         })
     try:
@@ -632,11 +628,6 @@ PORT_ALIAS = {
 def std_port(code):
     c = (code or "").strip().upper()
     return PORT_ALIAS.get(c, c)
-
-
-def _proxy_token_qs():
-    t = os.environ.get("PROXY_TOKEN", "").strip()
-    return ("&" + urllib.parse.urlencode({"token": t})) if t else ""
 
 
 # === KMTC ptpSchedule 통합 (v2.9) ===
@@ -726,56 +717,56 @@ def get_port_tz(loc_code, default="+09:00"):
     return PORT_TZ_MAP.get(loc_code[:2].upper(), default)
 
 
-def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4):
-    """KMTC ptpSchedule 호출 -> vessel 리스트.
+def _kmtc_code(un_locode):
+    """UN/LOCODE → KMTC 3자 코드. 미매핑 시 뒤 3자리 fallback (v2.28)."""
+    code = std_port(un_locode)
+    return KMTC_PORT_MAP.get(code) or (code[2:] if len(code) == 5 else None), code
 
-    v2.28: 포트코드 fallback(UN/LOCODE 뒤 3자리) + 미매핑 로깅
+
+_KMTC_CACHE = {}   # (from, to, period_date, week_term) → vessels
+_HMM_CACHE = {}    # (port, date_from, date_to) → rows
+
+
+def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4):
+    """KMTC ptpSchedule 호출 -> vessel 리스트 (실행 중 캐싱).
+
+    429(Too Many Requests)는 5초·10초 간격으로 최대 2회 재시도.
     """
-    import time
     proxy_url = os.environ.get("KMTC_PROXY_URL", "").strip()
     if not proxy_url:
         return []
-    _pol = std_port(pol_un)
-    _pod = std_port(pod_un)
-    kmtc_from = KMTC_PORT_MAP.get(_pol) or (_pol[2:] if len(_pol) == 5 else None)
-    kmtc_to = KMTC_PORT_MAP.get(_pod) or (_pod[2:] if len(_pod) == 5 else None)
+    kmtc_from, _pol = _kmtc_code(pol_un)
+    kmtc_to, _pod = _kmtc_code(pod_un)
     if not kmtc_from or not kmtc_to:
         print(f"  [KMTC-NOPORT] {_pol}->{_pod}", flush=True)
         return []
-    cache = getattr(fetch_kmtc_schedule, "_cache", None)
-    if cache is None:
-        cache = {}
-        fetch_kmtc_schedule._cache = cache
     ck = (kmtc_from, kmtc_to, period_date, week_term)
-    if ck in cache:
-        return cache[ck]
-    params = urllib.parse.urlencode({
+    if ck in _KMTC_CACHE:
+        return _KMTC_CACHE[ck]
+    url = _proxy_url(proxy_url, {
         "fromLocationCode": kmtc_from,
         "toLocationCode": kmtc_to,
         "periodDate": period_date,
         "weekTerm": str(week_term),
-        "webPriority": "A"
+        "webPriority": "A",
     })
-    url = proxy_url + "?" + params + _proxy_token_qs()
     data = None
     for attempt in range(3):
         try:
             time.sleep(0.6)
-            req = urllib.request.Request(url, headers={"User-Agent": "hisys-cargo-sync/2.28"})
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+            data = _http_get_json(url, timeout=20)
             break
         except Exception as e:
             if "429" in str(e) and attempt < 2:
                 time.sleep(5 * (attempt + 1))
                 continue
             print(f"  [KMTC-ERR] {kmtc_from}->{kmtc_to} {period_date}: {type(e).__name__}: {e}", flush=True)
-            cache[ck] = []
+            _KMTC_CACHE[ck] = []
             return []
     vessels = []
     for sched in data if isinstance(data, list) else []:
-        _pod_trml = (sched.get("dischargeTerminalCode") or "").strip()
-        _cls = (sched.get("cargoCutOffTime") or "").strip()
+        pod_trml = (sched.get("dischargeTerminalCode") or "").strip()
+        cls = (sched.get("cargoCutOffTime") or "").strip()
         for v in sched.get("vessel", []):
             if v.get("vesselName"):
                 vessels.append({
@@ -785,12 +776,13 @@ def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4):
                     "eta": v.get("vesselArrivalDate"),
                     "loadPort": v.get("loadPortCode"),
                     "dischargePort": v.get("dischargePortCode"),
-                    "podTerminal": _pod_trml,
-                    "cls": _cls,
+                    "podTerminal": pod_trml,
+                    "cls": cls,
                 })
-    cache[ck] = vessels
+    _KMTC_CACHE[ck] = vessels
     print(f"  [KMTC-OK] {kmtc_from}->{kmtc_to} {period_date} vessels={len(vessels)}", flush=True)
     return vessels
+
 
 def match_kmtc_vessel(vessels, vessel_name_str):
     """차수의 '선명&항차' 문자열로 KMTC vessel 리스트에서 매칭.
@@ -820,39 +812,31 @@ HMM_PROXY_DEFAULT = "https://hisys-unipass-proxy.vercel.app/api/hmm-port"
 
 
 def fetch_hmm_port(port_un, date_from, date_to):
-    """HMM 항구별 기항 스케줄 -> resultData 리스트 (캐싱)."""
-    import time
+    """HMM 항구별 기항 스케줄 -> resultData 리스트 (실행 중 캐싱)."""
     proxy_url = (os.environ.get("HMM_PROXY_URL") or HMM_PROXY_DEFAULT).strip()
     port = std_port(port_un)
     if len(port) != 5:
         return []
-    cache = getattr(fetch_hmm_port, "_cache", None)
-    if cache is None:
-        cache = {}
-        fetch_hmm_port._cache = cache
     ck = (port, date_from, date_to)
-    if ck in cache:
-        return cache[ck]
-    url = proxy_url + "?" + urllib.parse.urlencode({
+    if ck in _HMM_CACHE:
+        return _HMM_CACHE[ck]
+    url = _proxy_url(proxy_url, {
         "portCode": port,
         "durationFrom": date_from,
         "durationTo": date_to,
         "optionVessel": "2",
-    }) + _proxy_token_qs()
+    })
     rows = []
     try:
         time.sleep(0.5)
-        req = urllib.request.Request(url, headers={"User-Agent": "hisys-cargo-sync/2.31"})
-        with urllib.request.urlopen(req, timeout=25) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        rows = data.get("resultData") or []
+        rows = _http_get_json(url, timeout=25).get("resultData") or []
         print(f"  [HMM-OK] {port} {date_from}-{date_to} calls={len(rows)}", flush=True)
     except Exception as e:
         if "400" in str(e):
             print(f"  [PORT-UNKNOWN] {port_un} -> {port} (HMM 미인식, PORT_ALIAS 추가 필요)", flush=True)
         else:
             print(f"  [HMM-ERR] {port} {date_from}-{date_to}: {type(e).__name__}: {e}", flush=True)
-    cache[ck] = rows
+    _HMM_CACHE[ck] = rows
     return rows
 
 
@@ -890,13 +874,12 @@ def fetch_hmm_schedule(pol_un, pod_un, ref_date, vessel_name_str):
     """POL 기항에서 ETD + vvdCode 확보 -> POD 기항에서 같은 vvdCode로 ETA.
     반환 형식은 match_kmtc_vessel 결과와 호환 (etd/eta는 현지시각, tz 미부착).
     """
-    from datetime import datetime as _dt, timedelta as _td
     try:
-        base = _dt.strptime((ref_date or "")[:10], "%Y-%m-%d")
+        base = datetime.strptime((ref_date or "")[:10], "%Y-%m-%d")
     except Exception:
-        base = _dt.now()
-    pol_rows = fetch_hmm_port(pol_un, (base - _td(days=7)).strftime("%Y%m%d"),
-                              (base + _td(days=14)).strftime("%Y%m%d"))
+        base = datetime.now()
+    pol_rows = fetch_hmm_port(pol_un, (base - timedelta(days=7)).strftime("%Y%m%d"),
+                              (base + timedelta(days=14)).strftime("%Y%m%d"))
     hit = match_hmm_vessel(pol_rows, vessel_name_str)
     if not hit:
         return None
@@ -905,9 +888,9 @@ def fetch_hmm_schedule(pol_un, pod_un, ref_date, vessel_name_str):
     vvd = hit.get("vvdCode") or ""
     eta = None
     if etd and vvd:
-        d0 = _dt.strptime(etd[:10], "%Y-%m-%d")
+        d0 = datetime.strptime(etd[:10], "%Y-%m-%d")
         pod_rows = fetch_hmm_port(pod_un, d0.strftime("%Y%m%d"),
-                                  (d0 + _td(days=35)).strftime("%Y%m%d"))
+                                  (d0 + timedelta(days=35)).strftime("%Y%m%d"))
         for r in pod_rows:
             if (r.get("vvdCode") or "") == vvd:
                 arr = r.get("arrival") or {}
@@ -939,20 +922,15 @@ def decide_search_order(io, type_, hwaju=""):
         - 항공: HBL → MBL
         - TYPE 미지정 해상수입: MBL → HBL
     """
-    t = (type_ or "").upper().strip()
-    io = (io or "").strip()
-    is_mbl_first = any(h in (hwaju or "") for h in HWAJU_MBL_FIRST)
-    if io == "해상수입":
-        if is_mbl_first:
-            return [("mbl", "MBL"), ("hbl", "HBL")]
-        if t == "FCL":
-            return [("mbl", "MBL"), ("hbl", "HBL")]
-        if t == "LCL":
-            return [("hbl", "HBL"), ("mbl", "MBL")]  # LCL도 fallback 추가
-        return [("mbl", "MBL"), ("hbl", "HBL")]
-    if io == "항공수입":
-        return [("hbl", "HBL"), ("mbl", "MBL")]
-    return [("hbl", "HBL"), ("mbl", "MBL")]
+    mbl_first = [("mbl", "MBL"), ("hbl", "HBL")]
+    hbl_first = [("hbl", "HBL"), ("mbl", "MBL")]
+    if (io or "").strip() != "해상수입":
+        return hbl_first  # 항공수입 및 기타
+    if any(h in (hwaju or "") for h in HWAJU_MBL_FIRST):
+        return mbl_first
+    if (type_ or "").upper().strip() == "LCL":
+        return hbl_first
+    return mbl_first  # FCL 및 TYPE 미지정
 
 
 def fetch_with_fallback(api_key, bl_yy, hbl, mbl, io, type_, cargmt=None, hwaju="", debug=False):

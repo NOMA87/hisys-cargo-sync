@@ -9,6 +9,8 @@ v2.0 통합 자동 동기화 (Claude 토큰 0)
   4. 기존 노션 값과 비교 → 변경된 필드만 PATCH
   5. 통계 로그 출력
 
+노션 API 호출/페이지네이션/속성 추출은 notion_api.py 공용 (kmtc_sync.py와 공유).
+
 환경변수 필수:
   UNIPASS_KEY      유니패스 인증키 (또는 ~/.config/unipass/key.txt)
   NOTION_TOKEN     노션 Internal Integration 토큰 (secret_xxxx)
@@ -19,22 +21,21 @@ cron 예시:
   # crontab -e
   0 9,14,18 * * 1-5 /usr/bin/python3 ~/unipass/sync_runner.py >> ~/.unipass.log 2>&1
 """
-import json
-import re
 import os
+import re
 import sys
 import time
-import urllib.request
-import urllib.error
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
+from datetime import datetime
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
+from notion_api import (
+    get_notion_token, normalize_ds_id, notion_request, query_data_source, extract_prop, update_page,
+)
 from unipass import (
     get_api_key, fetch_with_fallback, build_result, is_invalid_bl, norm,
-    QUARANTINE_HWAJU, fetch_hjit_freeday, fetch_snct_freeday, fetch_kmtc_schedule, match_kmtc_vessel
+    fetch_hjit_freeday, fetch_snct_freeday,
 )
 
 
@@ -71,40 +72,6 @@ def eta_drift_days(notion_eta, header_eta):
         return None
 
 
-NOTION_API = "https://api.notion.com/v1"
-NOTION_VERSION = "2025-09-03"
-
-DEFAULT_DS_ID = "37249e8e-4d2e-8362-ad24-87ad69c1ce5e"
-
-
-def get_notion_token():
-    tok = os.environ.get("NOTION_TOKEN")
-    if not tok:
-        sys.stderr.write(
-            "[ERROR] NOTION_TOKEN 환경변수가 없습니다.\n"
-            "  노션 → Settings → Connections → integrations에서 발급\n"
-            "  export NOTION_TOKEN='secret_xxxx...'\n"
-        )
-        sys.exit(2)
-    return tok
-
-
-def notion_request(method, path, token, body=None):
-    url = NOTION_API + path
-    data = json.dumps(body).encode("utf-8") if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method, headers={
-        "Authorization": f"Bearer {token}",
-        "Notion-Version": NOTION_VERSION,
-        "Content-Type": "application/json",
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Notion API {method} {path} → {e.code}: {body}")
-
-
 def query_chasu_db(token, ds_id, page_size=100, backfill=False):
     """차수 DB query (페이지네이션 처리). 필터/정렬 적용.
 
@@ -112,8 +79,6 @@ def query_chasu_db(token, ds_id, page_size=100, backfill=False):
         BACKFILL=1 환경변수 시 '프로세스 ≠ 반출완료' 조건 제외 → 모든 수입 차수 query.
         반입시간/반출시간만 PATCH (다른 필드는 미변경).
     """
-    pages = []
-    start_cursor = None
     filter_and = [
         {"property": "입력완료√", "checkbox": {"equals": True}},
         {"or": [
@@ -124,72 +89,32 @@ def query_chasu_db(token, ds_id, page_size=100, backfill=False):
     if not backfill:
         # 평소엔 반출완료 제외 (이미 끝난 차수는 다시 안 봄)
         filter_and.insert(1, {"property": "프로세스", "status": {"does_not_equal": "반출완료"}})
-    body_template = {
-        "filter": {"and": filter_and},
-        "sorts": [{"property": "최종 편집 일시", "direction": "descending"}],
-        "page_size": page_size,
-    }
-    while True:
-        body = dict(body_template)
-        if start_cursor:
-            body["start_cursor"] = start_cursor
-        result = notion_request("POST", f"/data_sources/{ds_id}/query", token, body)
-        pages.extend(result.get("results", []))
-        if not result.get("has_more"):
-            break
-        start_cursor = result.get("next_cursor")
-    return pages
+    sorts = [{"property": "최종 편집 일시", "direction": "descending"}]
+    return query_data_source(token, ds_id, {"and": filter_and}, sorts=sorts, page_size=page_size)
 
 
-def extract_prop(page_props, name, kind):
-    """노션 page properties에서 값 추출."""
-    p = page_props.get(name)
-    if not p:
-        return None
-    if kind == "title":
-        arr = p.get("title", [])
-        return "".join(t.get("plain_text", "") for t in arr) or None
-    if kind == "rich_text":
-        arr = p.get("rich_text", [])
-        return "".join(t.get("plain_text", "") for t in arr) or None
-    if kind == "select":
-        s = p.get("select")
-        return s.get("name") if s else None
-    if kind == "status":
-        s = p.get("status")
-        return s.get("name") if s else None
-    if kind == "date":
-        d = p.get("date")
-        return d.get("start") if d else None
-    if kind == "checkbox":
-        return p.get("checkbox", False)
-    if kind == "relation":
-        return [r.get("id") for r in p.get("relation", [])]
-    return None
+_HWAJU_CACHE = {}   # 화주 페이지 ID → 화주명
 
 
 def get_hwaju_name(token, relation_ids):
-    """화주 페이지 ID로 title 가져오기. 캐시."""
+    """화주 페이지 ID로 title 가져오기 (실행 중 캐싱)."""
     if not relation_ids:
         return ""
     pid = relation_ids[0]
-    cached = get_hwaju_name._cache.get(pid)
-    if cached is not None:
-        return cached
+    if pid in _HWAJU_CACHE:
+        return _HWAJU_CACHE[pid]
+    title = ""
     try:
         page = notion_request("GET", f"/pages/{pid}", token)
         # 일반적으로 첫 title property가 화주명
-        for name, prop in page.get("properties", {}).items():
+        for prop in page.get("properties", {}).values():
             if prop.get("type") == "title":
-                arr = prop.get("title", [])
-                title = "".join(t.get("plain_text", "") for t in arr)
-                get_hwaju_name._cache[pid] = title
-                return title
+                title = "".join(t.get("plain_text", "") for t in prop.get("title", []))
+                break
     except Exception as e:
         sys.stderr.write(f"[WARN] 화주 fetch 실패 {pid}: {e}\n")
-    get_hwaju_name._cache[pid] = ""
-    return ""
-get_hwaju_name._cache = {}
+    _HWAJU_CACHE[pid] = title
+    return title
 
 
 def parse_chasu_page(page, token):
@@ -327,8 +252,29 @@ def build_diff(current, result, today_iso, backfill=False):
     return payload
 
 
-def update_page(token, page_id, properties):
-    return notion_request("PATCH", f"/pages/{page_id}", token, {"properties": properties})
+def fetch_terminal_deadline(pod_terminal, container_nos, already_out, chasu):
+    """POD 터미널(HJIT/SNCT)별 컨테이너 반출기한 조회.
+
+    조건: 터미널 매칭 + 컨테이너 번호 있음 + 미반출. 둘 다 아니거나 조회 실패 시 None.
+    HJIT → SNCT 순으로 시도하며, 나중에 성공한 값이 우선 (기존 동작 유지).
+    """
+    if not container_nos or already_out:
+        if "HJIT" in pod_terminal:
+            print(f"  [HJIT-SKIP] {chasu}: no_outbound={not already_out} has_cntr={bool(container_nos)}")
+        return None
+    first_cntr = container_nos.split(",")[0].strip()
+    deadline = None
+    for tag, fetch in (("HJIT", fetch_hjit_freeday), ("SNCT", fetch_snct_freeday)):
+        if tag not in pod_terminal:
+            continue
+        try:
+            found = fetch(first_cntr)
+            print(f"  [{tag}] {chasu}: cntr={first_cntr} -> {found}")
+            if found:
+                deadline = found
+        except Exception as e:
+            print(f"  [{tag}-ERROR] {chasu}: {type(e).__name__}: {e}")
+    return deadline
 
 
 def main():
@@ -336,9 +282,7 @@ def main():
     today_iso = datetime.now().strftime("%Y-%m-%d")
     notion_token = get_notion_token()
     api_key = get_api_key()
-    ds_id = os.environ.get("NOTION_DS_ID", DEFAULT_DS_ID).replace("-", "")
-    # UUID 형태로 복원
-    ds_id = f"{ds_id[0:8]}-{ds_id[8:12]}-{ds_id[12:16]}-{ds_id[16:20]}-{ds_id[20:32]}"
+    ds_id = normalize_ds_id()
 
     # v2.5: BACKFILL 모드 (모든 수입 차수 대상으로 반입/반출시간만 채움)
     backfill = os.environ.get("BACKFILL", "").lower() in ("1", "true", "yes")
@@ -378,31 +322,19 @@ def main():
                 stats["no_response"] += 1
             print(f"  [{i+1}/{len(pages)}] {case['차수']:20} 스킵: {reason[:60]}")
 
-            # v2.16: skip 케이스에서도 비고 컨테이너 추출 + HJIT 반출기한 자동 조회
+            # v2.16: skip 케이스에서도 비고 컨테이너 추출 + HJIT/SNCT 반출기한 자동 조회
             try:
                 cntr_fallback = extract_container_nos_from_remark(case["current"].get("비고"))
-                pod_terminal_cur = case["current"].get("POD 터미널") or ""
                 fb_payload = {}
                 if cntr_fallback and cntr_fallback != (case["current"].get("컨테이너 번호") or ""):
                     fb_payload["컨테이너 번호"] = {"rich_text": [{"text": {"content": cntr_fallback}}]}
-                # HJIT 반출기한 (POD 터미널=HJIT + 컨테이너 있음 + 미반출)
-                if cntr_fallback and "HJIT" in pod_terminal_cur and not case["current"].get("반출시간"):
-                    first_cntr = cntr_fallback.split(",")[0].strip()
-                    try:
-                        _d = fetch_hjit_freeday(first_cntr)
-                        if _d:
-                            fb_payload["컨테이너 반출기한"] = {"date": {"start": _d}}
-                    except Exception as _e:
-                        print(f"  [HJIT-FALLBACK-ERR] {case['차수']}: {_e}")
-                # v2.18: SNCT 반출기한 (POD 터미널=SNCT)
-                if cntr_fallback and "SNCT" in pod_terminal_cur and not case["current"].get("반출시간"):
-                    first_cntr = cntr_fallback.split(",")[0].strip()
-                    try:
-                        _d = fetch_snct_freeday(first_cntr)
-                        if _d:
-                            fb_payload["컨테이너 반출기한"] = {"date": {"start": _d}}
-                    except Exception as _e:
-                        print(f"  [SNCT-FALLBACK-ERR] {case['차수']}: {_e}")
+                if cntr_fallback:
+                    deadline = fetch_terminal_deadline(
+                        case["current"].get("POD 터미널") or "", cntr_fallback,
+                        bool(case["current"].get("반출시간")), case["차수"],
+                    )
+                    if deadline:
+                        fb_payload["컨테이너 반출기한"] = {"date": {"start": deadline}}
                 if fb_payload:
                     update_page(notion_token, case["pageId"], fb_payload)
                     print(f"  [SKIP-FALLBACK] {case['차수']}: {list(fb_payload.keys())} 갱신")
@@ -414,35 +346,14 @@ def main():
         if not result.get("containerNos"):
             result["containerNos"] = extract_container_nos_from_remark(case["current"].get("비고"))
 
-        # HJIT 자동 조회 (POD=HJIT + 미반출 + 컨테이너 번호 있음)
+        # HJIT/SNCT 반출기한 자동 조회 → 같은 노션 필드(컨테이너 반출기한)에 저장
         pod_terminal = (result.get("podTerminal") or "") or (case["current"].get("POD 터미널") or "")
-        _is_hjit = "HJIT" in pod_terminal
-        _has_cntr = bool(result.get("containerNos"))
-        _no_outbound = not case["current"].get("반출시간")
-        if _is_hjit and _no_outbound and _has_cntr:
-            first_cntr = result["containerNos"].split(",")[0].strip()
-            print(f"  [HJIT-DEBUG] {case['차수']}: try fetch cntr={first_cntr} proxy={'set' if os.environ.get('HJIT_PROXY_URL') else 'EMPTY'}")
-            try:
-                _d = fetch_hjit_freeday(first_cntr)
-                result["hjitDeadline"] = _d
-                print(f"  [HJIT-DEBUG] {case['차수']}: result={_d}")
-            except Exception as _e:
-                print(f"  [HJIT-ERROR] {case['차수']}: {type(_e).__name__}: {_e}")
-        elif _is_hjit:
-            print(f"  [HJIT-SKIP] {case['차수']}: hjit={_is_hjit} no_outbound={_no_outbound} has_cntr={_has_cntr}")
-
-        # v2.18: SNCT 무료장치일 자동 조회 (POD 터미널 = SNCT + 미반출 + 컨테이너 있음)
-        _is_snct = "SNCT" in pod_terminal
-        if _is_snct and _no_outbound and _has_cntr:
-            first_cntr = result["containerNos"].split(",")[0].strip()
-            print(f"  [SNCT-DEBUG] {case['차수']}: try fetch cntr={first_cntr} proxy={'set' if os.environ.get('SNCT_PROXY_URL') else 'EMPTY'}")
-            try:
-                _d = fetch_snct_freeday(first_cntr)
-                if _d:
-                    result["hjitDeadline"] = _d  # 같은 노션 필드(컨테이너 반출기한)에 저장
-                print(f"  [SNCT-DEBUG] {case['차수']}: result={_d}")
-            except Exception as _e:
-                print(f"  [SNCT-ERROR] {case['차수']}: {type(_e).__name__}: {_e}")
+        deadline = fetch_terminal_deadline(
+            pod_terminal, result.get("containerNos"),
+            bool(case["current"].get("반출시간")), case["차수"],
+        )
+        if deadline:
+            result["hjitDeadline"] = deadline
 
         # v2.17: 정합성 가드 — 본선 불일치 + ETA drift 30일+ 검사
         # 어긋나면 ETA/프로세스/통관 필드는 PATCH 보류, 컨테이너/HJIT는 통과
@@ -526,7 +437,7 @@ def main():
     if managed_chasu:
         print(f"  ⚠️ 관리대상화물 {stats['managed']}건: {', '.join(managed_chasu)}")
     if unmatched_sheds:
-        print(f"  매핑 실패 shedNm:")
+        print("  매핑 실패 shedNm:")
         for shed, cs in sorted(unmatched_sheds.items(), key=lambda x: -len(x[1])):
             print(f"    - {shed} ({len(cs)}건)")
 
