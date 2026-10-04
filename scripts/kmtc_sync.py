@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
-from unipass import KMTC_PORT_MAP, fetch_kmtc_schedule, match_kmtc_vessel, get_port_tz, match_terminal
+from unipass import KMTC_PORT_MAP, fetch_kmtc_schedule, match_kmtc_vessel, get_port_tz, match_terminal, fetch_hmm_schedule
 
 NOTION_API = "https://api.notion.com/v1"
 NOTION_VERSION = "2025-09-03"
@@ -173,6 +173,16 @@ def main():
             stats["errored"] += 1
             print(f"  [{i+1}/{len(pages)}] {chasu:20} 오류: {e}")
             continue
+
+        # v2.4: KMTC에 없으면 HMM portSchedule로 fallback (HMM + 공동운항 선박)
+        if not matched:
+            try:
+                matched = fetch_hmm_schedule(pol, pod, ref or "", vessel_str)
+            except Exception as e:
+                print(f"  [HMM-FALLBACK-ERR] {chasu}: {e}")
+                matched = None
+            if matched:
+                print(f"  [{i+1}/{len(pages)}] {chasu:20} HMM-MATCH: {matched.get('voyageNumber')} ETD={matched.get('etd')} ETA={matched.get('eta')}")
 
         if not matched:
             stats["nomatch"] += 1
