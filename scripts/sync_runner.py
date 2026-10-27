@@ -40,19 +40,28 @@ from unipass import (
 
 
 # === v2.17: 정합성 가드 ===
+def _voy_core(v):
+    """항차 끝 방향 글자(N/S/E/W) 제거 — 숫자 뒤에 붙은 경우만.
+    예) 2610N → 2610, 2610S → 2610, 2609E → 2609
+    """
+    v = (v or "").replace(" ", "").upper()
+    return re.sub(r"(?<=\d)[NSEW]$", "", v)
+
+
 def vessel_match_ok(notion_str, hdr_ship, hdr_vyd):
     """노션 선명&항차 vs 유니패스 header 본선/항차 매칭.
     None 반환 시 검증 불가 (어느 한 쪽이 비어 있음).
+    v2.31: 항차 방향 글자(N/S/E/W) 차이는 동일 항차로 간주.
     """
     if not notion_str or not hdr_ship:
         return None
     parts = notion_str.strip().split()
     if len(parts) < 2:
         return None
-    notion_voy = parts[-1].upper()
+    notion_voy = _voy_core(parts[-1])
     notion_name = "".join(parts[:-1]).upper()
     ship = (hdr_ship or "").replace(" ", "").upper()
-    vyd = (hdr_vyd or "").replace(" ", "").upper()
+    vyd = _voy_core(hdr_vyd)
     name_match = notion_name in ship or ship in notion_name
     voy_match = (notion_voy == vyd) or (vyd and (vyd in notion_voy or notion_voy in vyd))
     return name_match and voy_match
