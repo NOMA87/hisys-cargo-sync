@@ -49,7 +49,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 ENDPOINT = "https://unipass.customs.go.kr:38010/ext/rest/cargCsclPrgsInfoQry/retrieveCargCsclPrgsInfo"
-USER_AGENT = "hisys-cargo-sync/2.33"
+USER_AGENT = "hisys-cargo-sync/2.34"
 
 # 유니패스 진행이력 필드명
 _STAGE_KEY = "cargTrcnRelaBsopTpcd"   # 처리단계명
@@ -656,7 +656,7 @@ KMTC_PORT_MAP = {
     "KRKAN": "KAN",  # GWANGYANG (표준)
     "KRUSN": "USN",  # ULSAN
     # 일본
-    "JPTKY": "TYO",  # TOKYO
+    "JPTKY": "TKY",  # TOKUYAMA (v2.34: 기존 TYO=도쿄 오매핑 수정, KMTC MBL 접두 KMTCTKY)
     "JPYOK": "YOK",  # YOKOHAMA
     "JPHKT": "HKT",  # HAKATA
     "JPKOB": "KOB",  # KOBE
@@ -723,11 +723,34 @@ def _kmtc_code(un_locode):
     return KMTC_PORT_MAP.get(code) or (code[2:] if len(code) == 5 else None), code
 
 
+def kmtc_from_candidates(pol_un, mbl=""):
+    """v2.34: KMTC 선적항 코드 후보 (중복 제거, 순서 유지).
+
+    1) 코드표(KMTC_PORT_MAP) 값  2) KMTC MBL 접두 3자리 (KMTCTKY0095764 -> TKY)
+    3) UN/LOCODE 뒤 3자리 (JPTKY -> TKY)
+    kmtc_sync.py가 앞에서부터 매칭될 때까지 순서대로 조회한다.
+    """
+    cands = []
+    mapped, code = _kmtc_code(pol_un)
+    if mapped:
+        cands.append(mapped)
+    m = re.match(r"^KMTC([A-Z]{3})", (mbl or "").strip().upper())
+    if m:
+        cands.append(m.group(1))
+    if code and len(code) == 5:
+        cands.append(code[2:])
+    out = []
+    for c in cands:
+        if c and c not in out:
+            out.append(c)
+    return out
+
+
 _KMTC_CACHE = {}   # (from, to, period_date, week_term) → vessels
 _HMM_CACHE = {}    # (port, date_from, date_to) → rows
 
 
-def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4):
+def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4, from_code=None):
     """KMTC ptpSchedule 호출 -> vessel 리스트 (실행 중 캐싱).
 
     429(Too Many Requests)는 5초·10초 간격으로 최대 2회 재시도.
@@ -737,6 +760,8 @@ def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4):
         return []
     kmtc_from, _pol = _kmtc_code(pol_un)
     kmtc_to, _pod = _kmtc_code(pod_un)
+    if from_code:  # v2.34: 대체 선적항 코드 (MBL 접두 / 뒤 3자리)
+        kmtc_from = from_code
     if not kmtc_from or not kmtc_to:
         print(f"  [KMTC-NOPORT] {_pol}->{_pod}", flush=True)
         return []
