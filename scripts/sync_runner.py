@@ -146,6 +146,7 @@ def parse_chasu_page(page, token):
         "current": {
             "프로세스": extract_prop(props, "프로세스", "status"),
             "ETA": eta,
+            "캘린더 표기": extract_prop(props, "캘린더 표기", "date"),   # v2.33: 매번 재PATCH 방지
             "수입신고번호": extract_prop(props, "수입신고번호", "rich_text"),
             "수입신고수리일": extract_prop(props, "수입신고수리일", "date"),
             "화물관리번호": extract_prop(props, "화물관리번호", "rich_text"),
