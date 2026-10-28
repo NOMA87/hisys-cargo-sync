@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-KMTC / HMM 스케줄 동기화 (v2.7)
+KMTC / HMM 스케줄 동기화 (v2.8)
 
 - 입력완료 ✓ + 프로세스 ∈ [미반영, 입항보고] OR is_empty
 - FCL + LCL + 해상수출입 모두 처리
@@ -21,6 +21,7 @@ KMTC / HMM 스케줄 동기화 (v2.7)
 v2.6: 노션 헬퍼를 notion_api.py로 분리, 로그/날짜 처리 정리 (동작 동일)
 v2.7: KMTC 선적항 코드 후보(코드표 → MBL 접두 → 뒤 3자리) 순차 조회,
       ETD 없으면 ETA-10일부터 조회 (일본 등 장거리 항로 대비)
+v2.8: NOMATCH 시 KMTC 조회 선박 목록 로그 출력
 """
 import os
 import sys
@@ -77,11 +78,13 @@ def lookup_schedule(pol, pod, ref, period_date, vessel_str, mbl=""):
         if matched:
             return matched, "HMM-FIRST"
     # v2.7: 선적항 코드 후보(코드표 → MBL 접두 → 뒤 3자리) 순으로 매칭될 때까지 조회
+    seen = []   # v2.8: NOMATCH 시 조회된 선박 목록 로그용
     for idx, from_code in enumerate(kmtc_from_candidates(pol, mbl)):
-        matched = match_kmtc_vessel(
-            fetch_kmtc_schedule(pol, pod, period_date, 4, from_code=from_code), vessel_str)
+        vessels = fetch_kmtc_schedule(pol, pod, period_date, 4, from_code=from_code)
+        matched = match_kmtc_vessel(vessels, vessel_str)
         if matched:
             return matched, ("KMTC" if idx == 0 else f"KMTC-ALT({from_code})")
+        seen.extend(vessels or [])
     if not is_hmm:
         # v2.4: KMTC에 없으면 HMM portSchedule로 fallback (HMM + 공동운항 선박)
         # fallback 실패는 오류가 아니라 NOMATCH로 집계
@@ -92,6 +95,12 @@ def lookup_schedule(pol, pod, ref, period_date, vessel_str, mbl=""):
             matched = None
         if matched:
             return matched, "HMM-FALLBACK"
+    # v2.8: 매칭 실패 원인 파악용 — KMTC 조회 선박 목록(최대 20척) 출력
+    if seen:
+        names = ", ".join(
+            f"{v.get('vesselName', '')} {v.get('voyageNumber', '')}({(v.get('etd') or '')[:10]})"
+            for v in seen[:20])
+        print(f"    [KMTC-CANDIDATES] {len(seen)}척: {names}")
     return None, None
 
 
