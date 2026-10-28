@@ -409,6 +409,19 @@ def main():
                 except Exception as _e:
                     print(f"  [GUARD-ERR] {case['차수']}: {_e}")
 
+        # v2.32: 가드 통과(또는 화물관리번호로 동일 화물 확정) 시 이전 [검증 실패] 표시 자동 삭제
+        if not guard_warn:
+            _rm = case["current"].get("비고") or ""
+            if "[검증 실패" in _rm:
+                _cleaned = "\n".join(l for l in _rm.split("\n") if "[검증 실패" not in l).strip()
+                _rt = [{"text": {"content": _cleaned}}] if _cleaned else []
+                try:
+                    update_page(notion_token, case["pageId"], {"비고": {"rich_text": _rt}})
+                    case["current"]["비고"] = _cleaned
+                    print(f"  [GUARD-CLEAR] {case['차수']}: 검증 실패 표시 삭제")
+                except Exception as _e:
+                    print(f"  [GUARD-CLEAR-ERR] {case['차수']}: {_e}")
+
         # 변경된 필드만 update
         diff = build_diff(case["current"], result, today_iso, backfill=backfill)
         if not diff:
