@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-KMTC / HMM 스케줄 동기화 (v2.6)
+KMTC / HMM 스케줄 동기화 (v2.7)
 
 - 입력완료 ✓ + 프로세스 ∈ [미반영, 입항보고] OR is_empty
 - FCL + LCL + 해상수출입 모두 처리
@@ -19,6 +19,8 @@ KMTC / HMM 스케줄 동기화 (v2.6)
   - 수출 CLS는 6666 더미값 제외
 
 v2.6: 노션 헬퍼를 notion_api.py로 분리, 로그/날짜 처리 정리 (동작 동일)
+v2.7: KMTC 선적항 코드 후보(코드표 → MBL 접두 → 뒤 3자리) 순차 조회,
+      ETD 없으면 ETA-10일부터 조회 (일본 등 장거리 항로 대비)
 """
 import os
 import sys
@@ -32,6 +34,7 @@ from notion_api import (
 )
 from unipass import (
     fetch_kmtc_schedule, match_kmtc_vessel, get_port_tz, match_terminal, fetch_hmm_schedule,
+    kmtc_from_candidates,
 )
 
 TARGET_FILTER = {"and": [
@@ -50,6 +53,7 @@ TARGET_FILTER = {"and": [
 TBA_TOKENS = ("TBA", "TBN", "TBD", "TBC")   # 선명 미정 표기
 STALE_DAYS = 30                             # 이보다 오래된 ETA/ETD 차수는 스킵 (KMTC 스케줄은 4주 한정)
 PERIOD_LEAD_DAYS = 3                        # periodDate = 기준일 - 3일
+ETA_LEAD_DAYS = 10                          # v2.7: ETD 없을 때 ETA - 10일 (장거리 항로 대비)
 
 
 def parse_date(s):
@@ -62,7 +66,7 @@ def parse_date(s):
         return None
 
 
-def lookup_schedule(pol, pod, ref, period_date, vessel_str):
+def lookup_schedule(pol, pod, ref, period_date, vessel_str, mbl=""):
     """HMM/KMTC 조회 순서를 선명에 따라 결정하고 첫 매칭 결과 반환.
 
     반환: (matched, source)  source ∈ {"HMM-FIRST", "KMTC", "HMM-FALLBACK", None}
@@ -72,9 +76,12 @@ def lookup_schedule(pol, pod, ref, period_date, vessel_str):
         matched = fetch_hmm_schedule(pol, pod, ref, vessel_str)
         if matched:
             return matched, "HMM-FIRST"
-    matched = match_kmtc_vessel(fetch_kmtc_schedule(pol, pod, period_date, 4), vessel_str)
-    if matched:
-        return matched, "KMTC"
+    # v2.7: 선적항 코드 후보(코드표 → MBL 접두 → 뒤 3자리) 순으로 매칭될 때까지 조회
+    for idx, from_code in enumerate(kmtc_from_candidates(pol, mbl)):
+        matched = match_kmtc_vessel(
+            fetch_kmtc_schedule(pol, pod, period_date, 4, from_code=from_code), vessel_str)
+        if matched:
+            return matched, ("KMTC" if idx == 0 else f"KMTC-ALT({from_code})")
     if not is_hmm:
         # v2.4: KMTC에 없으면 HMM portSchedule로 fallback (HMM + 공동운항 선박)
         # fallback 실패는 오류가 아니라 NOMATCH로 집계
@@ -141,6 +148,7 @@ def main():
         etd = extract_prop(props, "ETD", "date") or ""
         eta = extract_prop(props, "ETA", "date") or ""
         process = extract_prop(props, "프로세스", "status") or ""
+        mbl = extract_prop(props, "MBL No.", "rich_text") or ""
         is_export = (io_type == "해상수출")
         # 입항보고 단계 = 본선 이미 입항. ETA는 유니패스가 더 정확하므로 ETD-only로 집계
         is_arrived = (process == "입항보고")
@@ -180,11 +188,12 @@ def main():
         # periodDate: ETD 또는 ETA 기준 -3일
         ref = etd or eta
         ref_date = parse_date(ref)
-        period_base = datetime.combine(ref_date, datetime.min.time()) - timedelta(days=PERIOD_LEAD_DAYS) if ref_date else datetime.now()
+        lead = PERIOD_LEAD_DAYS if etd else ETA_LEAD_DAYS   # v2.7
+        period_base = datetime.combine(ref_date, datetime.min.time()) - timedelta(days=lead) if ref_date else datetime.now()
         period_date = period_base.strftime("%Y%m%d")
 
         try:
-            matched, source = lookup_schedule(pol, pod, ref, period_date, vessel_str)
+            matched, source = lookup_schedule(pol, pod, ref, period_date, vessel_str, mbl)
         except Exception as e:
             stats["errored"] += 1
             log(f"오류: {e}")
