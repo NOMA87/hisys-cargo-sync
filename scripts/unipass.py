@@ -49,7 +49,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 ENDPOINT = "https://unipass.customs.go.kr:38010/ext/rest/cargCsclPrgsInfoQry/retrieveCargCsclPrgsInfo"
-USER_AGENT = "hisys-cargo-sync/2.34"
+USER_AGENT = "hisys-cargo-sync/2.35"
 
 # 유니패스 진행이력 필드명
 _STAGE_KEY = "cargTrcnRelaBsopTpcd"   # 처리단계명
@@ -753,7 +753,7 @@ _HMM_CACHE = {}    # (port, date_from, date_to) → rows
 def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4, from_code=None):
     """KMTC ptpSchedule 호출 -> vessel 리스트 (실행 중 캐싱).
 
-    429(Too Many Requests)는 5초·10초 간격으로 최대 2회 재시도.
+    429(Too Many Requests)는 10초·20초·30초 간격으로 최대 3회 재시도 (v2.35).
     """
     proxy_url = os.environ.get("KMTC_PROXY_URL", "").strip()
     if not proxy_url:
@@ -776,14 +776,14 @@ def fetch_kmtc_schedule(pol_un, pod_un, period_date, week_term=4, from_code=None
         "webPriority": "A",
     })
     data = None
-    for attempt in range(3):
+    for attempt in range(4):
         try:
-            time.sleep(0.6)
+            time.sleep(1.0)
             data = _http_get_json(url, timeout=20)
             break
         except Exception as e:
-            if "429" in str(e) and attempt < 2:
-                time.sleep(5 * (attempt + 1))
+            if "429" in str(e) and attempt < 3:
+                time.sleep(10 * (attempt + 1))
                 continue
             print(f"  [KMTC-ERR] {kmtc_from}->{kmtc_to} {period_date}: {type(e).__name__}: {e}", flush=True)
             _KMTC_CACHE[ck] = []
