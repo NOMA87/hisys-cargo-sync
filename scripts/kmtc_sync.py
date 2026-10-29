@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-KMTC / HMM 스케줄 동기화 (v2.8)
+KMTC / HMM 스케줄 동기화 (v2.9)
 
-- 입력완료 ✓ + 프로세스 ∈ [미반영, 입항보고] OR is_empty
+- 입력완료 ✓ + 프로세스 ∈ [미반영, 입항보고, 출항완료] OR is_empty
 - FCL + LCL + 해상수출입 모두 처리
 - 차수의 선명&항차로 본선 매칭 → ETD/ETA + 캘린더 표기 PATCH
 - 별도 workflow(kmtc_sync.yml)에서 cron 실행
@@ -22,10 +22,15 @@ v2.6: 노션 헬퍼를 notion_api.py로 분리, 로그/날짜 처리 정리 (동
 v2.7: KMTC 선적항 코드 후보(코드표 → MBL 접두 → 뒤 3자리) 순차 조회,
       ETD 없으면 ETA-10일부터 조회 (일본 등 장거리 항로 대비)
 v2.8: NOMATCH 시 KMTC 조회 선박 목록 로그 출력
+v2.9: 수출 차수 출항완료 전환 후에도 스케줄 재조회 계속 (항해 중 ETA 변동 반영),
+      출항완료 차수도 대상에 포함(STALE_DAYS 내), today를 KST 기준으로 계산
 """
 import os
 import sys
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+KST = ZoneInfo("Asia/Seoul")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
@@ -43,6 +48,7 @@ TARGET_FILTER = {"and": [
     {"or": [
         {"property": "프로세스", "status": {"equals": "미반영"}},
         {"property": "프로세스", "status": {"equals": "입항보고"}},
+        {"property": "프로세스", "status": {"equals": "출항완료"}},   # v2.9: 항해 중 ETA 추적
         {"property": "프로세스", "status": {"is_empty": True}},
     ]},
     {"or": [
@@ -135,7 +141,7 @@ def build_payload(matched, props, pol, pod, is_export):
 
 
 def main():
-    started = datetime.now()
+    started = datetime.now(KST)   # v2.9: GitHub 러너는 UTC → KST 기준 날짜
     today = started.date()
     notion_token = get_notion_token()
     ds_id = normalize_ds_id()
@@ -143,7 +149,7 @@ def main():
     print(f"[{started.isoformat()}] KMTC 동기화 시작 (DS: {ds_id})")
     pages = query_data_source(notion_token, ds_id, TARGET_FILTER)
     total = len(pages)
-    print(f"  대상 차수: {total}건 (입력완료 + 프로세스∈[미반영,입항보고] + 해상)")
+    print(f"  대상 차수: {total}건 (입력완료 + 프로세스∈[미반영,입항보고,출항완료] + 해상)")
 
     stats = {"matched": 0, "etd_only": 0, "nomatch": 0, "skipped": 0, "errored": 0}
 
@@ -171,13 +177,12 @@ def main():
             continue
 
         # v2.0: 수출 차수는 ETD 경과 시 출항완료로 전환 (유니패스 대상 아님)
+        # v2.9: 전환 후에도 continue 하지 않고 스케줄 재조회 → 실제 출항시각/항해 중 ETA 변동 반영
         etd_date = parse_date(etd)
-        if is_export and etd_date and etd_date < today:
+        if is_export and etd_date and etd_date < today and process != "출항완료":
             try:
                 update_page(notion_token, page["id"], {"프로세스": {"status": {"name": "출항완료"}}})
-                stats["skipped"] += 1
                 log(f"출항완료 전환 (ETD {etd[:10]})")
-                continue
             except Exception as e:
                 log(f"출항완료 전환 실패: {e}")
 
@@ -232,8 +237,9 @@ def main():
             tag = "MATCH:"
         log(f"{tag} {matched['vesselName']} {matched['voyageNumber']} ETD={matched.get('etd')} ETA={matched.get('eta')}")
 
-    elapsed = (datetime.now() - started).total_seconds()
-    print(f"\n[{datetime.now().isoformat()}] 완료 ({elapsed:.1f}초)")
+    now = datetime.now(KST)
+    elapsed = (now - started).total_seconds()
+    print(f"\n[{now.isoformat()}] 완료 ({elapsed:.1f}초)")
     print(f"  매칭: {stats['matched']}건 / ETD-only: {stats['etd_only']}건 / NOMATCH: {stats['nomatch']}건"
           f" / 스킵: {stats['skipped']}건 / 오류: {stats['errored']}건")
 
