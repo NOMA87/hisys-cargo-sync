@@ -309,9 +309,10 @@ def main():
 
     for i, page in enumerate(pages):
         case = parse_chasu_page(page, notion_token)
-        if is_invalid_bl(case["hbl"]) or is_invalid_bl(case["mbl"]):
+        # HBL/MBL 둘 다 없을 때만 스킵 — 하나만 있으면 fetch_with_fallback이 그 키로 조회
+        if is_invalid_bl(case["hbl"]) and is_invalid_bl(case["mbl"]):
             stats["skipped"] += 1
-            print(f"  [{i+1}/{len(pages)}] {case['차수']:20} 스킵: HBL 또는 MBL 공란/TBA")
+            print(f"  [{i+1}/{len(pages)}] {case['차수']:20} 스킵: HBL·MBL 모두 공란/TBA")
             continue
 
         try:
