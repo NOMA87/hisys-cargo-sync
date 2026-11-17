@@ -1,0 +1,37 @@
+name: Maersk API 연결 점검
+
+on:
+  workflow_dispatch:
+    inputs:
+      vessel:
+        description: "선명 항차 (비우면 KRPUS 향후 7일 기항 요약)"
+        required: false
+        default: ""
+      pol:
+        description: "POL UN/LOCODE"
+        required: false
+        default: "CNSHA"
+      pod:
+        description: "POD UN/LOCODE"
+        required: false
+        default: "KRPUS"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Probe
+        env:
+          MAERSK_API_KEY: ${{ secrets.MAERSK_API_KEY }}
+          PYTHONIOENCODING: utf-8
+        run: |
+          if [ -n "${{ github.event.inputs.vessel }}" ]; then
+            python scripts/maersk_probe.py --vessel "${{ github.event.inputs.vessel }}" --pol "${{ github.event.inputs.pol }}" --pod "${{ github.event.inputs.pod }}"
+          else
+            python scripts/maersk_probe.py --port "${{ github.event.inputs.pod }}"
+          fi
