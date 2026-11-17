@@ -42,6 +42,7 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -1061,3 +1062,138 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# === Maersk DCSA Commercial Schedules 통합 (v2.4) ===
+# https://developer.maersk.com/catalogue/ocean-commercial-schedules-dcsa
+# 인증: Consumer-Key 헤더 (MAERSK_API_KEY). 한도: 50콜/시간, 50콜/분.
+MAERSK_CS_BASE = "https://api.maersk.com/ocean/commercial-schedules/dcsa/v1"
+_MAERSK_CACHE = {}
+_CLASSIFIER_RANK = {"ACT": 3, "EST": 2, "PLN": 1}
+
+
+def maersk_enabled():
+    return bool(os.environ.get("MAERSK_API_KEY", "").strip())
+
+
+def _maersk_get(path, params, timeout=25):
+    """Maersk DCSA GET → JSON (실행 중 캐싱). 키 없으면 빈 리스트."""
+    key = os.environ.get("MAERSK_API_KEY", "").strip()
+    if not key:
+        return []
+    url = f"{MAERSK_CS_BASE}{path}?{urllib.parse.urlencode(params)}"
+    if url in _MAERSK_CACHE:
+        return _MAERSK_CACHE[url]
+    req = urllib.request.Request(url, headers={
+        "Consumer-Key": key, "Accept": "application/json", "User-Agent": USER_AGENT})
+    try:
+        time.sleep(0.3)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        print(f"  [MAERSK-OK] {path} {params} items={len(data) if isinstance(data, list) else '?'}", flush=True)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "ignore")[:200]
+        print(f"  [MAERSK-ERR] {e.code} {path} {params} {body}", flush=True)
+        data = []
+    except Exception as e:
+        print(f"  [MAERSK-ERR] {path} {params} {e}", flush=True)
+        data = []
+    _MAERSK_CACHE[url] = data
+    return data
+
+
+def _best_timestamp(timestamps, event_type):
+    """ARRI/DEPA 중 ACT > EST > PLN 우선으로 eventDateTime 반환 (오프셋 제거, 현지시각)."""
+    best, rank = None, 0
+    for ts in timestamps or []:
+        if (ts.get("eventTypeCode") or "").upper() != event_type:
+            continue
+        r = _CLASSIFIER_RANK.get((ts.get("eventClassifierCode") or "").upper(), 0)
+        if r > rank and ts.get("eventDateTime"):
+            best, rank = ts["eventDateTime"], r
+    if not best:
+        return None
+    # '2026-11-20T14:00:00+09:00' → '2026-11-20T14:00:00' (tz는 호출측에서 부착)
+    return best[:19]
+
+
+def _maersk_vessel_name(vessel_name_str):
+    """'MAERSK SEBAROK 545N' → ('MAERSK SEBAROK', '545N'). 항차 없으면 ('...', '')."""
+    parts = vessel_name_str.strip().split()
+    if len(parts) >= 2 and re.search(r"\d", parts[-1]):
+        return " ".join(parts[:-1]), parts[-1].upper()
+    return " ".join(parts), ""
+
+
+def fetch_maersk_schedule(pol_un, pod_un, ref_date, vessel_name_str):
+    """Maersk DCSA /vessel-schedules 로 POL 출항(ETD)·POD 도착(ETA) 조회.
+
+    반환 형식은 match_kmtc_vessel / fetch_hmm_schedule 결과와 호환.
+    매칭: 선명 부분일치 → POL 기항(UN/LOCODE) 중 수출항차가 노션 항차와 부분일치하는 call
+          → 같은 항차의 POD 기항에서 ARRI.
+    """
+    if not maersk_enabled():
+        return None
+    name, voy = _maersk_vessel_name(vessel_name_str)
+    if not name:
+        return None
+    try:
+        base = datetime.strptime((ref_date or "")[:10], "%Y-%m-%d")
+    except Exception:
+        base = datetime.now()
+    params = {
+        "vesselName": name,
+        "startDate": (base - timedelta(days=10)).strftime("%Y-%m-%d"),
+        "endDate": (base + timedelta(days=40)).strftime("%Y-%m-%d"),
+        "limit": 20,
+    }
+    services = _maersk_get("/vessel-schedules", params)
+    pol, pod = std_port(pol_un), std_port(pod_un)
+    want = name.replace(" ", "").upper()
+
+    for svc in services or []:
+        for vs in svc.get("vesselSchedules") or []:
+            vname = ((vs.get("vessel") or {}).get("name") or "").replace(" ", "").upper()
+            if not vname or (want not in vname and vname not in want):
+                continue
+            calls = vs.get("transportCalls") or []
+            # 1) POL 기항 후보: UN/LOCODE 일치 + (항차 지정 시) 수출항차 부분일치
+            pol_calls = [c for c in calls
+                         if ((c.get("location") or {}).get("UNLocationCode") or "").upper() == pol]
+            if voy:
+                exact = [c for c in pol_calls
+                         if voy in (c.get("carrierExportVoyageNumber") or "").upper()
+                         or voy in (c.get("carrierImportVoyageNumber") or "").upper()]
+                pol_calls = exact or []
+            if not pol_calls:
+                continue
+            pol_call = pol_calls[0]
+            etd = _best_timestamp(pol_call.get("timestamps"), "DEPA")
+            exp_voy = pol_call.get("carrierExportVoyageNumber") or pol_call.get("carrierImportVoyageNumber") or voy
+            # 2) POD 기항: 같은 항차(수입항차 == POL 수출항차)로, ETD 이후 첫 ARRI
+            eta, pod_terminal = None, ""
+            pod_calls = [c for c in calls
+                         if ((c.get("location") or {}).get("UNLocationCode") or "").upper() == pod]
+            same_voy = [c for c in pod_calls
+                        if exp_voy and exp_voy in ((c.get("carrierImportVoyageNumber") or "") + " "
+                                                    + (c.get("carrierExportVoyageNumber") or ""))]
+            for c in (same_voy or pod_calls):
+                arr = _best_timestamp(c.get("timestamps"), "ARRI")
+                if arr and (not etd or arr >= etd):
+                    eta = arr
+                    loc = c.get("location") or {}
+                    pod_terminal = loc.get("facilitySMDGCode") or loc.get("locationName") or ""
+                    break
+            if not etd and not eta:
+                continue
+            return {
+                "vesselName": (vs.get("vessel") or {}).get("name") or name,
+                "voyageNumber": exp_voy or "",
+                "etd": etd,
+                "eta": eta,
+                "podTerminal": pod_terminal,
+                "cls": "",
+                "source": "MAERSK",
+                "carrierService": svc.get("carrierServiceCode") or "",
+            }
+    return None
