@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-KMTC / HMM 스케줄 동기화 (v2.9)
+KMTC / HMM / Maersk 스케줄 동기화 (v3.0)
 
 - 입력완료 ✓ + 프로세스 ∈ [미반영, 입항보고, 출항완료] OR is_empty
 - FCL + LCL + 해상수출입 모두 처리
@@ -9,7 +9,8 @@ KMTC / HMM 스케줄 동기화 (v2.9)
 
 조회 순서:
   - 선명이 "HMM "으로 시작 → HMM portSchedule 먼저, 없으면 KMTC
-  - 그 외 → KMTC 먼저, 없으면 HMM (공동운항 선박 대비)
+  - 선명이 "MAERSK "/"SEALAND "/"MSC "으로 시작 → Maersk DCSA 먼저 (MAERSK_API_KEY 필요)
+  - 그 외 → KMTC 먼저, 없으면 HMM, 없으면 Maersk (공동운항 선박 대비)
 
 갱신 정책:
   - ETD/ETA는 항상 API 값으로 갱신 (본선/일자 변경 자동 반영)
@@ -24,6 +25,7 @@ v2.7: KMTC 선적항 코드 후보(코드표 → MBL 접두 → 뒤 3자리) 순
 v2.8: NOMATCH 시 KMTC 조회 선박 목록 로그 출력
 v2.9: 수출 차수 출항완료 전환 후에도 스케줄 재조회 계속 (항해 중 ETA 변동 반영),
       출항완료 차수도 대상에 포함(STALE_DAYS 내), today를 KST 기준으로 계산
+v3.0: Maersk DCSA Commercial Schedules 어댑터 추가 (MAERSK-FIRST / MAERSK-FALLBACK)
 """
 import os
 import sys
@@ -40,8 +42,10 @@ from notion_api import (
 )
 from unipass import (
     fetch_kmtc_schedule, match_kmtc_vessel, get_port_tz, match_terminal, fetch_hmm_schedule,
-    kmtc_from_candidates,
+    kmtc_from_candidates, fetch_maersk_schedule, maersk_enabled,
 )
+
+MAERSK_PREFIXES = ("MAERSK ", "SEALAND ", "MSK ")
 
 TARGET_FILTER = {"and": [
     {"property": "입력완료√", "checkbox": {"equals": True}},
@@ -76,13 +80,24 @@ def parse_date(s):
 def lookup_schedule(pol, pod, ref, period_date, vessel_str, mbl=""):
     """HMM/KMTC 조회 순서를 선명에 따라 결정하고 첫 매칭 결과 반환.
 
-    반환: (matched, source)  source ∈ {"HMM-FIRST", "KMTC", "HMM-FALLBACK", None}
+    반환: (matched, source)  source ∈ {"HMM-FIRST", "MAERSK-FIRST", "KMTC", "KMTC-ALT(..)",
+                                        "HMM-FALLBACK", "MAERSK-FALLBACK", None}
     """
-    is_hmm = vessel_str.strip().upper().startswith("HMM ")
+    up = vessel_str.strip().upper()
+    is_hmm = up.startswith("HMM ")
+    is_maersk = up.startswith(MAERSK_PREFIXES)
     if is_hmm:
         matched = fetch_hmm_schedule(pol, pod, ref, vessel_str)
         if matched:
             return matched, "HMM-FIRST"
+    if is_maersk and maersk_enabled():
+        try:
+            matched = fetch_maersk_schedule(pol, pod, ref, vessel_str)
+        except Exception as e:
+            print(f"  [MAERSK-FIRST-ERR] {vessel_str}: {e}")
+            matched = None
+        if matched:
+            return matched, "MAERSK-FIRST"
     # v2.7: 선적항 코드 후보(코드표 → MBL 접두 → 뒤 3자리) 순으로 매칭될 때까지 조회
     seen = []   # v2.8: NOMATCH 시 조회된 선박 목록 로그용
     for idx, from_code in enumerate(kmtc_from_candidates(pol, mbl)):
@@ -101,6 +116,15 @@ def lookup_schedule(pol, pod, ref, period_date, vessel_str, mbl=""):
             matched = None
         if matched:
             return matched, "HMM-FALLBACK"
+    if not is_maersk and maersk_enabled():
+        # v3.0: KMTC/HMM 모두 없으면 Maersk DCSA로 fallback (Maersk/Sealand 슬롯 선박 대비)
+        try:
+            matched = fetch_maersk_schedule(pol, pod, ref, vessel_str)
+        except Exception as e:
+            print(f"  [MAERSK-FALLBACK-ERR] {vessel_str}: {e}")
+            matched = None
+        if matched:
+            return matched, "MAERSK-FALLBACK"
     # v2.8: 매칭 실패 원인 파악용 — KMTC 조회 선박 목록(최대 20척) 출력
     if seen:
         names = ", ".join(
@@ -146,7 +170,7 @@ def main():
     notion_token = get_notion_token()
     ds_id = normalize_ds_id()
 
-    print(f"[{started.isoformat()}] KMTC 동기화 시작 (DS: {ds_id})")
+    print(f"[{started.isoformat()}] KMTC 동기화 시작 (DS: {ds_id}) [Maersk: {'ON' if maersk_enabled() else 'OFF'}]")
     pages = query_data_source(notion_token, ds_id, TARGET_FILTER)
     total = len(pages)
     print(f"  대상 차수: {total}건 (입력완료 + 프로세스∈[미반영,입항보고,출항완료] + 해상)")
