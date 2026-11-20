@@ -1,0 +1,58 @@
+name: 유니패스 단건 조회 (debug)
+
+on:
+  workflow_dispatch:
+    inputs:
+      hbl:
+        description: "HBL No."
+        required: false
+        default: ""
+      mbl:
+        description: "MBL No."
+        required: false
+        default: ""
+      cargmt:
+        description: "화물관리번호 (선택)"
+        required: false
+        default: ""
+      io:
+        description: "I/O"
+        required: false
+        default: "해상수입"
+      type:
+        description: "TYPE (FCL/LCL/AIR)"
+        required: false
+        default: "FCL"
+      hwaju:
+        description: "화주명 (선택)"
+        required: false
+        default: ""
+      bl_yy:
+        description: "BL 연도"
+        required: false
+        default: "2026"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: unipass.py --debug
+        env:
+          UNIPASS_PROXY_URL: ${{ secrets.UNIPASS_PROXY_URL }}
+          PROXY_TOKEN: ${{ secrets.PROXY_TOKEN }}
+          PYTHONIOENCODING: utf-8
+          IN_HBL: ${{ github.event.inputs.hbl }}
+          IN_MBL: ${{ github.event.inputs.mbl }}
+          IN_CARGMT: ${{ github.event.inputs.cargmt }}
+          IN_IO: ${{ github.event.inputs.io }}
+          IN_TYPE: ${{ github.event.inputs.type }}
+          IN_HWAJU: ${{ github.event.inputs.hwaju }}
+          IN_BLYY: ${{ github.event.inputs.bl_yy }}
+        run: |
+          python scripts/unipass.py --hbl "$IN_HBL" --mbl "$IN_MBL" --cargmt "$IN_CARGMT" \
+            --bl-yy "$IN_BLYY" --io "$IN_IO" --type "$IN_TYPE" --hwaju "$IN_HWAJU" --debug
