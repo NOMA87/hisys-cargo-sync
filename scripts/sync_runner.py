@@ -64,6 +64,13 @@ def vessel_match_ok(notion_str, hdr_ship, hdr_vyd):
     vyd = _voy_core(hdr_vyd)
     name_match = notion_name in ship or ship in notion_name
     voy_match = (notion_voy == vyd) or (vyd and (vyd in notion_voy or notion_voy in vyd))
+    # v2.33: 선사가 같은 기항에 북향/남향 항차를 연번으로 쓰는 경우(남성 2609N↔2610S 등)
+    #        BL 항차와 유니패스 항차 숫자가 ±1이면 동일 본선으로 간주
+    if name_match and not voy_match:
+        n_num = re.sub(r"\D", "", notion_voy)
+        h_num = re.sub(r"\D", "", vyd)
+        if n_num and h_num and len(n_num) == len(h_num) and abs(int(n_num) - int(h_num)) <= 1:
+            voy_match = True
     return name_match and voy_match
 
 
@@ -316,11 +323,12 @@ def main():
             continue
 
         try:
-            parsed, _, _, _, _ = fetch_with_fallback(
+            parsed, used_key, _, _, _ = fetch_with_fallback(
                 api_key, case["blYy"], case["hbl"], case["mbl"],
                 case["io"], case["type"], cargmt=case["cargmt"], hwaju=case["hwaju"]
             )
             result = build_result(parsed, case["hwaju"], case["io"])
+            result["_searchKey"] = used_key   # v2.33: 가드 완화 판단용
         except Exception as e:
             sys.stderr.write(f"[ERR] {case['차수']} ({case['hbl']}): {e}\n")
             stats["errored"] += 1
@@ -378,6 +386,14 @@ def main():
             result.get("shipNm"),
             result.get("vydf"),
         )
+        # v2.33: MBL/HBL 정확 조회(단건)로 나온 레코드는 선명만 일치하면 통과 — 항차 표기 차이는 무시
+        if vessel_ok is False and result.get("_searchKey") in ("MBL", "HBL"):
+            _ns = "".join((case["current"].get("선명&항차") or "").split()[:-1]).upper()
+            _us = (result.get("shipNm") or "").replace(" ", "").upper()
+            if _ns and _us and (_ns in _us or _us in _ns):
+                print(f"  [GUARD-RELAX] {case['차수']}: {result.get('_searchKey')} 일치 + 선명 일치 → 항차 차이 무시 "
+                      f"(notion={case['current'].get('선명&항차')} / unipass={result.get('shipNm')} {result.get('vydf')})")
+                vessel_ok = True
         drift = None if _cargmt_confirmed else eta_drift_days(case["current"].get("ETA"), result.get("eta"))
         guard_warn = []
         if vessel_ok is False:
