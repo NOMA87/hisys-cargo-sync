@@ -356,10 +356,17 @@ def map_process(history, hwaju):
     has_pass = False
 
     inbound_count = sum(1 for h in history if _is_inbound_row(h))
+    # v2.34: 보세운송 이력(신고접수/심사/수리/반출)이 있으면 LCL·내륙 보세운송 건 →
+    #        입항반입(CY)은 반입신고가 1건뿐이어도 "터미널반입"으로만 처리하고,
+    #        보세운송반입(CFS/보세창고) 신고가 들어와야 "반입완료"로 올린다.
+    #        (기존: 반입신고 2건 이상일 때만 분기 → CY 반입 시점에 반입완료로 잘못 표기)
+    has_bonded_transit = any(
+        "보세운송" in (_stage(h) + _remark(h)).replace(" ", "") for h in history
+    )
 
     for item in history:
         t = _stage(item)
-        c = _remark(item)
+        c = _remark(item).replace(" ", "")
 
         if t in STAGE_MAP:
             candidates.append(STAGE_MAP[t])
@@ -367,7 +374,7 @@ def map_process(history, hwaju):
 
         if is_inbound_decl(t):
             has_inbound = True
-            if "입항반입" in c and inbound_count >= 2:
+            if "입항반입" in c and (inbound_count >= 2 or has_bonded_transit):
                 candidates.append({"name": "터미널반입", "priority": 3})
             else:
                 candidates.append({"name": "반입완료", "priority": 4})
