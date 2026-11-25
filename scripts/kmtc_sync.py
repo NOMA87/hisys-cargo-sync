@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-KMTC / HMM / Maersk 스케줄 동기화 (v3.0)
+KMTC / HMM / Maersk / 장금 스케줄 동기화 (v3.1)
 
 - 입력완료 ✓ + 프로세스 ∈ [미반영, 입항보고, 출항완료] OR is_empty
 - FCL + LCL + 해상수출입 모두 처리
@@ -26,6 +26,8 @@ v2.8: NOMATCH 시 KMTC 조회 선박 목록 로그 출력
 v2.9: 수출 차수 출항완료 전환 후에도 스케줄 재조회 계속 (항해 중 ETA 변동 반영),
       출항완료 차수도 대상에 포함(STALE_DAYS 내), today를 KST 기준으로 계산
 v3.0: Maersk DCSA Commercial Schedules 어댑터 추가 (MAERSK-FIRST / MAERSK-FALLBACK)
+v3.1: 장금상선 e-Service 모선별 스케줄 어댑터 추가 (SINOKOR-FIRST / SINOKOR-FALLBACK)
+      — API 미제공 선사는 홈페이지 조회로 대체 (sinokor.py)
 """
 import os
 import sys
@@ -44,6 +46,9 @@ from unipass import (
     fetch_kmtc_schedule, match_kmtc_vessel, get_port_tz, match_terminal, fetch_hmm_schedule,
     kmtc_from_candidates, fetch_maersk_schedule, maersk_enabled,
 )
+from sinokor import fetch_sinokor_schedule
+
+SINOKOR_PREFIXES = ("SINOKOR ", "HEUNG-A ", "HEUNGA ", "PEGASUS ")   # v3.1: 장금/흥아 자사선
 
 MAERSK_PREFIXES = ("MAERSK ", "SEALAND ", "MSK ")
 
@@ -86,6 +91,7 @@ def lookup_schedule(pol, pod, ref, period_date, vessel_str, mbl=""):
     up = vessel_str.strip().upper()
     is_hmm = up.startswith("HMM ")
     is_maersk = up.startswith(MAERSK_PREFIXES)
+    is_sinokor = up.startswith(SINOKOR_PREFIXES)
     if is_hmm:
         matched = fetch_hmm_schedule(pol, pod, ref, vessel_str)
         if matched:
@@ -98,6 +104,14 @@ def lookup_schedule(pol, pod, ref, period_date, vessel_str, mbl=""):
             matched = None
         if matched:
             return matched, "MAERSK-FIRST"
+    if is_sinokor:
+        try:
+            matched = fetch_sinokor_schedule(pol, pod, ref, vessel_str)
+        except Exception as e:
+            print(f"  [SINOKOR-FIRST-ERR] {vessel_str}: {e}")
+            matched = None
+        if matched:
+            return matched, "SINOKOR-FIRST"
     # v2.7: 선적항 코드 후보(코드표 → MBL 접두 → 뒤 3자리) 순으로 매칭될 때까지 조회
     seen = []   # v2.8: NOMATCH 시 조회된 선박 목록 로그용
     for idx, from_code in enumerate(kmtc_from_candidates(pol, mbl)):
@@ -125,6 +139,15 @@ def lookup_schedule(pol, pod, ref, period_date, vessel_str, mbl=""):
             matched = None
         if matched:
             return matched, "MAERSK-FALLBACK"
+    if not is_sinokor:
+        # v3.1: 장금 e-Service 모선별 스케줄 fallback (장금/흥아 + 공동운항 선박: 동진·범주 등)
+        try:
+            matched = fetch_sinokor_schedule(pol, pod, ref, vessel_str)
+        except Exception as e:
+            print(f"  [SINOKOR-FALLBACK-ERR] {vessel_str}: {e}")
+            matched = None
+        if matched:
+            return matched, "SINOKOR-FALLBACK"
     # v2.8: 매칭 실패 원인 파악용 — KMTC 조회 선박 목록(최대 20척) 출력
     if seen:
         names = ", ".join(
