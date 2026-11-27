@@ -39,6 +39,8 @@ jobs:
           KMTC_PROXY_URL: ${{ secrets.KMTC_PROXY_URL }}
           PROXY_TOKEN: ${{ secrets.PROXY_TOKEN }}
           MAERSK_API_KEY: ${{ secrets.MAERSK_API_KEY }}
+          COSCO_APP_KEY: ${{ secrets.COSCO_APP_KEY }}
+          COSCO_SECRET_KEY: ${{ secrets.COSCO_SECRET_KEY }}
           PYTHONIOENCODING: utf-8
         run: |
           python scripts/kmtc_sync.py
