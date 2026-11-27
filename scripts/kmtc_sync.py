@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-KMTC / HMM / Maersk / 장금 스케줄 동기화 (v3.1)
+KMTC / HMM / Maersk / 장금 / COSCO 스케줄 동기화 (v3.2)
 
 - 입력완료 ✓ + 프로세스 ∈ [미반영, 입항보고, 출항완료] OR is_empty
 - FCL + LCL + 해상수출입 모두 처리
@@ -10,7 +10,8 @@ KMTC / HMM / Maersk / 장금 스케줄 동기화 (v3.1)
 조회 순서:
   - 선명이 "HMM "으로 시작 → HMM portSchedule 먼저, 없으면 KMTC
   - 선명이 "MAERSK "/"SEALAND "/"MSC "으로 시작 → Maersk DCSA 먼저 (MAERSK_API_KEY 필요)
-  - 그 외 → KMTC 먼저, 없으면 HMM, 없으면 Maersk (공동운항 선박 대비)
+  - 선명이 COSCO/CSCL/XIN/OOCL 로 시작하거나 ' HE'로 끝남 → COSCO COP 먼저 (COSCO_APP_KEY 필요)
+  - 그 외 → KMTC 먼저, 없으면 HMM → Maersk → 장금 → COSCO (공동운항 선박 대비)
 
 갱신 정책:
   - ETD/ETA는 항상 API 값으로 갱신 (본선/일자 변경 자동 반영)
@@ -28,6 +29,9 @@ v2.9: 수출 차수 출항완료 전환 후에도 스케줄 재조회 계속 (�
 v3.0: Maersk DCSA Commercial Schedules 어댑터 추가 (MAERSK-FIRST / MAERSK-FALLBACK)
 v3.1: 장금상선 e-Service 모선별 스케줄 어댑터 추가 (SINOKOR-FIRST / SINOKOR-FALLBACK)
       — API 미제공 선사는 홈페이지 조회로 대체 (sinokor.py)
+v3.2: COSCO COP 스케줄 API 어댑터 추가 (COSCO-FIRST / COSCO-FALLBACK, cosco.py)
+      — COSCO_APP_KEY / COSCO_SECRET_KEY 필요. 도시 UUID는 e-Lines 공개검색으로 조회
+      — COSCO/OOCL 공동운항 선박도 반환되므로 fallback 으로도 유효
 """
 import os
 import sys
@@ -47,10 +51,17 @@ from unipass import (
     kmtc_from_candidates, fetch_maersk_schedule, maersk_enabled,
 )
 from sinokor import fetch_sinokor_schedule
+from cosco import fetch_cosco_schedule, cosco_enabled
 
 SINOKOR_PREFIXES = ("SINOKOR ", "HEUNG-A ", "HEUNGA ", "PEGASUS ")   # v3.1: 장금/흥아 자사선
-
+COSCO_PREFIXES = ("COSCO ", "CSCL ", "XIN ", "OOCL ")                  # v3.2: COSCO/OOCL 자사선
 MAERSK_PREFIXES = ("MAERSK ", "SEALAND ", "MSK ")
+
+
+def is_cosco_vessel(up):
+    """COSCO 선명 판정: 접두어 또는 선명이 ' HE'로 끝남 (河 급: LING YUN HE, TIAN CHANG HE 등)."""
+    name = " ".join(up.split()[:-1]) if len(up.split()) >= 2 else up
+    return up.startswith(COSCO_PREFIXES) or name.endswith(" HE")
 
 TARGET_FILTER = {"and": [
     {"property": "입력완료√", "checkbox": {"equals": True}},
@@ -86,12 +97,13 @@ def lookup_schedule(pol, pod, ref, period_date, vessel_str, mbl=""):
     """HMM/KMTC 조회 순서를 선명에 따라 결정하고 첫 매칭 결과 반환.
 
     반환: (matched, source)  source ∈ {"HMM-FIRST", "MAERSK-FIRST", "KMTC", "KMTC-ALT(..)",
-                                        "HMM-FALLBACK", "MAERSK-FALLBACK", None}
+                                        "HMM-FALLBACK", "MAERSK-FALLBACK", "SINOKOR-*", "COSCO-*", None}
     """
     up = vessel_str.strip().upper()
     is_hmm = up.startswith("HMM ")
     is_maersk = up.startswith(MAERSK_PREFIXES)
     is_sinokor = up.startswith(SINOKOR_PREFIXES)
+    is_cosco = is_cosco_vessel(up)
     if is_hmm:
         matched = fetch_hmm_schedule(pol, pod, ref, vessel_str)
         if matched:
@@ -112,6 +124,14 @@ def lookup_schedule(pol, pod, ref, period_date, vessel_str, mbl=""):
             matched = None
         if matched:
             return matched, "SINOKOR-FIRST"
+    if is_cosco and cosco_enabled():
+        try:
+            matched = fetch_cosco_schedule(pol, pod, ref, vessel_str)
+        except Exception as e:
+            print(f"  [COSCO-FIRST-ERR] {vessel_str}: {e}")
+            matched = None
+        if matched:
+            return matched, "COSCO-FIRST"
     # v2.7: 선적항 코드 후보(코드표 → MBL 접두 → 뒤 3자리) 순으로 매칭될 때까지 조회
     seen = []   # v2.8: NOMATCH 시 조회된 선박 목록 로그용
     for idx, from_code in enumerate(kmtc_from_candidates(pol, mbl)):
@@ -148,6 +168,15 @@ def lookup_schedule(pol, pod, ref, period_date, vessel_str, mbl=""):
             matched = None
         if matched:
             return matched, "SINOKOR-FALLBACK"
+    if not is_cosco and cosco_enabled():
+        # v3.2: COSCO COP fallback (COSCO/OOCL + 공동운항 선박 대비)
+        try:
+            matched = fetch_cosco_schedule(pol, pod, ref, vessel_str)
+        except Exception as e:
+            print(f"  [COSCO-FALLBACK-ERR] {vessel_str}: {e}")
+            matched = None
+        if matched:
+            return matched, "COSCO-FALLBACK"
     # v2.8: 매칭 실패 원인 파악용 — KMTC 조회 선박 목록(최대 20척) 출력
     if seen:
         names = ", ".join(
@@ -193,7 +222,7 @@ def main():
     notion_token = get_notion_token()
     ds_id = normalize_ds_id()
 
-    print(f"[{started.isoformat()}] KMTC 동기화 시작 (DS: {ds_id}) [Maersk: {'ON' if maersk_enabled() else 'OFF'}]")
+    print(f"[{started.isoformat()}] KMTC 동기화 시작 (DS: {ds_id}) [Maersk: {'ON' if maersk_enabled() else 'OFF'} / COSCO: {'ON' if cosco_enabled() else 'OFF'}]")
     pages = query_data_source(notion_token, ds_id, TARGET_FILTER)
     total = len(pages)
     print(f"  대상 차수: {total}건 (입력완료 + 프로세스∈[미반영,입항보고,출항완료] + 해상)")
